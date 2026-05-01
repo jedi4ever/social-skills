@@ -4,6 +4,8 @@ description: Fetch content from social-media URLs (HackerNews, Reddit, GitHub, X
 allowed-tools: |
   Bash(scripts/socialfetch fetch *)
   Bash(scripts/socialfetch search *)
+  Bash(scripts/socialfetch timeline *)
+  Bash(scripts/socialfetch ask *)
   Bash(scripts/socialfetch bridge start)
   Bash(scripts/socialfetch bridge stop)
   Bash(scripts/socialfetch bridge status)
@@ -20,19 +22,21 @@ Wraps the `socialfetch` Go binary at `scripts/socialfetch` (relative to this ski
 
 **Trust the CLI.** It is the authority for every fetch and search supported by this skill. Always shell out to `scripts/socialfetch` — never reimplement fetching with WebFetch, curl, custom parsers, or hand-rolled API calls, even if the binary returns empty results or an error you find surprising. If a fetch comes back empty, surface that to the user and (if appropriate) re-run with `--log -` to see audit lines, but do not try to "fix it" by going around the CLI.
 
-## Three subcommands
+## Subcommands
 
 ```
-scripts/socialfetch fetch  <url> [<url>...]   [flags]
-scripts/socialfetch search "<query>"          [flags]
-scripts/socialfetch bridge [--port N]
+scripts/socialfetch fetch    <url> [<url>...]    [flags]
+scripts/socialfetch search   "<query>"           [flags]
+scripts/socialfetch timeline <user-or-url>       [flags]   recent activity for a user (X / LinkedIn)
+scripts/socialfetch ask      "<question>"        [flags]   grounded answer engine (perplexity / grok / google / tavily / serpapi)
+scripts/socialfetch bridge   {start|stop|status|run}
 ```
 
 Run `scripts/socialfetch --help` for the full reference. Output defaults to **markdown**; pass `-f json` or `-f jsonl` for structured input to other tools.
 
 ## Credentials (.env support)
 
-Provider keys (`X_API_KEY`, `X_API_SECRET`, `TAVILY_API_KEY`, `BING_API_KEY`, `SERPAPI_KEY`) can be set in the shell **or** placed in a `.env` file. At startup the binary loads, in order:
+Provider keys (`X_API_KEY`, `X_API_SECRET`, `TAVILY_API_KEY`, `BING_API_KEY`, `SERPAPI_KEY`, `BRAVE_API_KEY`, `PERPLEXITY_API_KEY`, `XAI_API_KEY`, `GOOGLE_API_KEY`/`GOOGLE_CSE_ID`, `YOUTUBE_API_KEY`, `BLUESKY_HANDLE`/`BLUESKY_APP_PASSWORD`, `GITHUB_TOKEN`) can be set in the shell **or** placed in a `.env` file. At startup the binary loads, in order:
 
 1. `./.env` (current working directory)
 2. `<binary_dir>/.env` (sits next to the installed binary — typically `~/.claude/skills/socialfetch/.env`)
@@ -44,6 +48,8 @@ Already-exported shell vars always win over file entries.
 - **One URL → fetch it.** `scripts/socialfetch fetch <url>` auto-detects the source from the host (HN, Reddit, GitHub, X, RSS, or generic article).
 - **A list of URLs → batch.** Pipe via stdin (`cat urls.txt | scripts/socialfetch fetch`) or use `-i FILE`. Add `-j 8` for parallel fetches; output stays in input order.
 - **Save to disk →** `-o FILE` for one file, `-o DIR/` for one file per URL.
+- **A user's recent posts → timeline.** `scripts/socialfetch timeline <user-or-url> [-p x|linkedin] [--kind ...] [-n N]`. Auto-detects the provider from URL; default for bare handles is X. See "Timeline subcommand" below.
+- **A grounded question → ask.** `scripts/socialfetch ask "<question>" -p perplexity|grok|google|tavily|serpapi`. Returns synthesized answer + sources. Use this only when the user explicitly wants a synthesized answer; for raw documents use `fetch` or `search`.
 - **A query → search.** Pick the provider that matches the user's intent:
   - "search the web" / unspecified → `duckduckgo` (no auth)
   - "search Brave" / privacy-focused web → `brave` (needs `BRAVE_API_KEY`; native `--last 7d` via freshness)
@@ -97,6 +103,58 @@ scripts/socialfetch search "vercel ai sdk" --last 7d --site vercel.com --site ai
 
 # HN search — top stories about a topic
 scripts/socialfetch search "rust async" -p hackernews -n 20
+```
+
+## Timeline subcommand
+
+```
+scripts/socialfetch timeline <user-or-url> [flags]
+  -p PROVIDER         x (default for bare handles) | linkedin
+  --kind KIND         x:        all (default), tweets, replies, retweets
+                      linkedin: all (default), posts, comments, reactions
+  -n N                max items (default 30)
+  --last DUR          sugar for --after (e.g. 7d, 24h)
+                      x has a hard 7-day cap
+  --after / --before  yyyy-mm-dd or RFC3339
+  --expand            (LinkedIn) re-fetch each item via the post fetcher (slow)
+  --no-reshares       (LinkedIn) drop reposts from the timeline
+```
+
+User identifier accepts:
+- `swyx` (bare handle → x)
+- `@swyx` (`@` implies x)
+- `https://x.com/swyx` (auto-detected)
+- `https://www.linkedin.com/in/patrickdebois/` (auto-detected)
+- `patrickdebois` + `-p linkedin`
+
+LinkedIn timelines drive the bridge through scroll/get_html cycles. Returns ~5–50 items depending on how active the user is. **Bridge required for LinkedIn — check `bridge status` first.** X timelines wrap recent-search; the 7-day cap applies and the binary pre-flights it with a clear error.
+
+```bash
+# Last 7d on X
+scripts/socialfetch timeline swyx --last 7d
+
+# LinkedIn posts only (no reshares), markdown
+scripts/socialfetch timeline patrickdebois -p linkedin --kind posts --no-reshares
+
+# LinkedIn full deep-fetch (each item gets its body + comments)
+scripts/socialfetch timeline matthewskelton -p linkedin --expand -n 10
+```
+
+## Ask subcommand
+
+```
+scripts/socialfetch ask "<question>" [flags]
+  -p PROVIDER     perplexity (default), grok, google, tavily, serpapi
+  -m MODEL        override the provider's default
+  --last WINDOW   day | week | month | year (provider-dependent)
+  --max-tokens N  cap response length
+```
+
+Returns a synthesized answer plus a numbered Sources list. Auth needed per provider — see Credentials above.
+
+```bash
+scripts/socialfetch ask "what changed in the openai-microsoft revenue share clause" -p grok
+scripts/socialfetch ask "best agent harness papers in the last month" -p perplexity --last month
 ```
 
 ## Listing supported sources/providers
