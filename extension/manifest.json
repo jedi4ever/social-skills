@@ -1,0 +1,53 @@
+{
+  "manifest_version": 3,
+  "name": "PatAI Browser Bridge",
+  "version": "1.1.0",
+  "description": "Bridges your authenticated browser sessions to the PatAI knowledge store via WebSocket. Supports LinkedIn, Twitter/X, and any web page.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "tabGroups",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.linkedin.com/*"],
+      "js": ["content.js", "feeds/linkedin.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["content.js", "feeds/twitter.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

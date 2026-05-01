@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/patrickdebois/social-skills/internal/search"
 )
@@ -65,6 +66,57 @@ func TestSearchPostsJSONAndDecodesResults(t *testing.T) {
 	}
 	if got[0].URL != "https://example.com/1" || got[0].Source != "tavily" {
 		t.Errorf("first: %+v", got[0])
+	}
+}
+
+// When the caller passes opts.After, results outside the window must be
+// dropped by the client-side post-filter using published_date. The topic
+// stays "general" — switching to "news" tanks recall on non-news queries.
+func TestSearchPostFiltersByPublishedDate(t *testing.T) {
+	var seenTopic string
+	var seenDays int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req request
+		_ = json.Unmarshal(body, &req)
+		seenTopic = req.Topic
+		seenDays = req.Days
+		// One in-window, one out-of-window, one without a date.
+		_, _ = w.Write([]byte(`{
+			"results":[
+				{"title":"Fresh","url":"https://example.com/fresh","content":"in window","score":1,"published_date":"` +
+			time.Now().UTC().Format("2006-01-02") + `"},
+				{"title":"Old","url":"https://example.com/old","content":"too old","score":1,"published_date":"2020-01-01"},
+				{"title":"Undated","url":"https://example.com/undated","content":"no date","score":1}
+			]
+		}`))
+	}))
+	defer srv.Close()
+
+	p := New()
+	p.BaseURL = srv.URL
+	p.Key = "k"
+
+	after := time.Now().AddDate(0, 0, -7)
+	got, err := p.Search(context.Background(), "x", search.Options{Max: 5, After: &after})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seenTopic != "general" {
+		t.Errorf("topic should stay general, got %q", seenTopic)
+	}
+	if seenDays <= 0 {
+		t.Errorf("days hint should still be sent: %d", seenDays)
+	}
+	// Old result dropped; fresh + undated kept (we can't prove undated is stale).
+	if len(got) != 2 {
+		t.Fatalf("want 2 results (fresh + undated), got %d: %+v", len(got), got)
+	}
+	if got[0].URL != "https://example.com/fresh" || got[0].Published == nil {
+		t.Errorf("fresh result missing or no Published: %+v", got[0])
+	}
+	if got[1].URL != "https://example.com/undated" {
+		t.Errorf("undated result not kept: %+v", got[1])
 	}
 }
 

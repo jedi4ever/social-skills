@@ -16,10 +16,13 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -27,13 +30,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/patrickdebois/social-skills/internal/bridge"
 	"github.com/patrickdebois/social-skills/internal/core"
+	"github.com/patrickdebois/social-skills/internal/dotenv"
 	"github.com/patrickdebois/social-skills/internal/render"
 	"github.com/patrickdebois/social-skills/internal/search"
 
 	"github.com/patrickdebois/social-skills/internal/sources/article"
 	"github.com/patrickdebois/social-skills/internal/sources/github"
 	"github.com/patrickdebois/social-skills/internal/sources/hackernews"
+	"github.com/patrickdebois/social-skills/internal/sources/linkedin"
 	"github.com/patrickdebois/social-skills/internal/sources/reddit"
 	"github.com/patrickdebois/social-skills/internal/sources/rss"
 	"github.com/patrickdebois/social-skills/internal/sources/twitter"
@@ -54,6 +60,7 @@ func buildRegistries() (*core.Registry, *search.Registry) {
 		reddit.New(),
 		github.New(),
 		twitter.New(),
+		linkedin.New(),
 		rss.New(),
 		article.New(), // catch-all — must be last
 	)
@@ -69,9 +76,35 @@ func buildRegistries() (*core.Registry, *search.Registry) {
 }
 
 func main() {
+	loadDotEnv()
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
+	}
+}
+
+// loadDotEnv pulls KEY=VALUE pairs from .env files in two locations,
+// without overriding anything already exported in the shell:
+//
+//  1. ./.env in the current working directory
+//  2. <binary_dir>/.env next to the installed binary (typically the
+//     skill directory at ~/.claude/skills/socialfetch)
+//
+// Both are optional; missing files are silent. Errors reading a present
+// file are reported to stderr but do not abort startup — credentials may
+// still be set elsewhere.
+func loadDotEnv() {
+	paths := []string{".env"}
+	if exe, err := os.Executable(); err == nil {
+		if real, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = real
+		}
+		paths = append(paths, filepath.Join(filepath.Dir(exe), ".env"))
+	}
+	for _, p := range paths {
+		if err := dotenv.Load(p); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: reading %s: %v\n", p, err)
+		}
 	}
 }
 
@@ -86,6 +119,8 @@ func run(args []string) error {
 		return runFetch(rest)
 	case "search":
 		return runSearch(rest)
+	case "bridge":
+		return runBridge(rest)
 	case "list":
 		return runList()
 	case "help", "-h", "--help":
@@ -583,6 +618,9 @@ func renderSearchResults(w io.Writer, results []search.Result, format render.For
 			query, providerName, len(results), time.Now().UTC().Format(time.RFC3339))
 		for i, r := range results {
 			fmt.Fprintf(w, "%d. [%s](%s)\n", i+1, displayTitle(r), r.URL)
+			if r.Published != nil {
+				fmt.Fprintf(w, "   *%s*\n", r.Published.Format("2006-01-02"))
+			}
 			if r.Snippet != "" {
 				fmt.Fprintf(w, "   %s\n\n", r.Snippet)
 			}
@@ -605,11 +643,12 @@ func asItem(_ map[string]any, results []search.Result, query, provider string) *
 	children := make([]core.Item, 0, len(results))
 	for _, r := range results {
 		children = append(children, core.Item{
-			Source:  r.Source,
-			Kind:    "search-result",
-			URL:     r.URL,
-			Title:   r.Title,
-			Summary: r.Snippet,
+			Source:    r.Source,
+			Kind:      "search-result",
+			URL:       r.URL,
+			Title:     r.Title,
+			Summary:   r.Snippet,
+			Published: r.Published,
 		})
 	}
 	return &core.Item{
@@ -824,6 +863,351 @@ func atoi(s string) (int, error) {
 	return n, nil
 }
 
+// runBridge dispatches the bridge subcommands. With no subcommand it
+// runs the daemon in the foreground (good for terminals and `nohup`);
+// `start`/`stop` add background lifecycle control via a PID file.
+//
+//	socialfetch bridge run          run in foreground (default)
+//	socialfetch bridge start        fork detached, write PID file
+//	socialfetch bridge stop         SIGTERM the running daemon
+//	socialfetch bridge status       check connection state
+func runBridge(args []string) error {
+	sub := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		sub = args[0]
+		args = args[1:]
+	}
+	switch sub {
+	case "", "run":
+		return runBridgeForeground(args)
+	case "start":
+		return runBridgeStart(args)
+	case "stop":
+		return runBridgeStop(args)
+	case "status", "ping":
+		return runBridgeStatus(args)
+	}
+	if sub == "-h" || sub == "--help" {
+		printBridgeHelp()
+		return nil
+	}
+	return fmt.Errorf("bridge: unknown subcommand %q (try `bridge --help`)", sub)
+}
+
+func printBridgeHelp() {
+	fmt.Print(`socialfetch bridge — control the browser-extension bridge
+
+Usage:
+  socialfetch bridge [run]         run in foreground (default)
+  socialfetch bridge start         fork a detached daemon (writes PID file)
+  socialfetch bridge stop          stop the running daemon
+  socialfetch bridge status        report extension connection state
+
+Common flags:
+  --port N                         listen port (default 5555)
+  --json                           machine-readable output (status only)
+
+Endpoints (when running):
+  ws://127.0.0.1:PORT/ws/extension     extension WebSocket
+  http://127.0.0.1:PORT/cmd            JSON command POST
+  http://127.0.0.1:PORT/status         JSON connection state
+
+Exit codes (status):
+  0   running and extension connected
+  1   running but no extension attached
+  2   bridge not reachable
+`)
+}
+
+func runBridgeForeground(args []string) error {
+	addr := fmt.Sprintf(":%d", bridge.DefaultPort)
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-h", "--help":
+			printBridgeHelp()
+			return nil
+		case "--port":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--port needs a value")
+			}
+			n, err := atoi(args[i])
+			if err != nil || n <= 0 || n > 65535 {
+				return fmt.Errorf("--port: invalid value %q", args[i])
+			}
+			addr = fmt.Sprintf(":%d", n)
+		default:
+			return fmt.Errorf("bridge: unknown argument %q", args[i])
+		}
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	srv := bridge.New()
+	srv.Logf = func(format string, a ...any) {
+		fmt.Fprintf(os.Stderr, "bridge: "+format+"\n", a...)
+	}
+	return srv.Run(ctx, addr)
+}
+
+// bridgeStateDir returns the directory we use for the PID file and the
+// daemon log. We keep it under the user's cache dir so it doesn't live
+// alongside source files; falls back to /tmp if the cache lookup fails.
+func bridgeStateDir() string {
+	if d, err := os.UserCacheDir(); err == nil {
+		return filepath.Join(d, "socialfetch")
+	}
+	return filepath.Join(os.TempDir(), "socialfetch")
+}
+
+func bridgePIDFile() string { return filepath.Join(bridgeStateDir(), "bridge.pid") }
+func bridgeLogFile() string { return filepath.Join(bridgeStateDir(), "bridge.log") }
+
+// runBridgeStart spawns the binary as a detached child running the
+// foreground bridge, then exits. Writes the child's PID to a file so a
+// later `bridge stop` can find it. Refuses to start if a running PID
+// is already on file (use `stop` first).
+func runBridgeStart(args []string) error {
+	port := bridge.DefaultPort
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--port":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--port needs a value")
+			}
+			n, err := atoi(args[i])
+			if err != nil || n <= 0 || n > 65535 {
+				return fmt.Errorf("--port: invalid value %q", args[i])
+			}
+			port = n
+		case "-h", "--help":
+			printBridgeHelp()
+			return nil
+		default:
+			return fmt.Errorf("bridge start: unknown argument %q", args[i])
+		}
+	}
+
+	if pid, ok := readBridgePID(); ok && processAlive(pid) {
+		return fmt.Errorf("bridge already running (pid %d) — `socialfetch bridge stop` first", pid)
+	}
+
+	if err := os.MkdirAll(bridgeStateDir(), 0o755); err != nil {
+		return err
+	}
+	logF, err := os.OpenFile(bridgeLogFile(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open log %s: %w", bridgeLogFile(), err)
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(exe, "bridge", "run", "--port", fmt.Sprintf("%d", port))
+	cmd.Stdout = logF
+	cmd.Stderr = logF
+	cmd.Stdin = nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // detach from terminal
+
+	if err := cmd.Start(); err != nil {
+		_ = logF.Close()
+		return fmt.Errorf("spawn bridge: %w", err)
+	}
+	pid := cmd.Process.Pid
+	// Don't reap the child — we want it to keep running after we exit.
+	_ = cmd.Process.Release()
+	_ = logF.Close()
+
+	if err := os.WriteFile(bridgePIDFile(), fmt.Appendf(nil, "%d\n", pid), 0o644); err != nil {
+		return fmt.Errorf("write pid file: %w", err)
+	}
+
+	// Tiny health check: poll /status for up to 2s. We require BOTH the
+	// child PID to still be alive AND the port to answer, so a spawn
+	// that loses the bind race against another process (we'd see only
+	// `reachable=true` but the child exited) is reported as a failure.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processAlive(pid) {
+			_ = os.Remove(bridgePIDFile())
+			return fmt.Errorf("bridge spawned (pid %d) but exited immediately — see %s (port %d may already be in use)",
+				pid, bridgeLogFile(), port)
+		}
+		if reachable(port) {
+			fmt.Printf("bridge started (pid %d, port %d, log %s)\n",
+				pid, port, bridgeLogFile())
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("bridge spawned (pid %d) but didn't open :%d in 2s — check %s",
+		pid, port, bridgeLogFile())
+}
+
+// runBridgeStop signals SIGTERM to the running daemon and removes the
+// PID file. Idempotent: a missing PID file or a dead PID is reported,
+// not an error.
+func runBridgeStop(args []string) error {
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-h" || args[i] == "--help" {
+			printBridgeHelp()
+			return nil
+		}
+		return fmt.Errorf("bridge stop: unknown argument %q", args[i])
+	}
+
+	pid, ok := readBridgePID()
+	if !ok {
+		fmt.Println("bridge not running (no pid file)")
+		return nil
+	}
+	if !processAlive(pid) {
+		fmt.Printf("bridge not running (stale pid %d) — clearing pid file\n", pid)
+		_ = os.Remove(bridgePIDFile())
+		return nil
+	}
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		return fmt.Errorf("kill pid %d: %w", pid, err)
+	}
+	// Wait briefly for graceful shutdown.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processAlive(pid) {
+			_ = os.Remove(bridgePIDFile())
+			fmt.Printf("bridge stopped (pid %d)\n", pid)
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// Still alive — escalate to SIGKILL.
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	_ = os.Remove(bridgePIDFile())
+	fmt.Printf("bridge force-killed (pid %d)\n", pid)
+	return nil
+}
+
+func readBridgePID() (int, bool) {
+	b, err := os.ReadFile(bridgePIDFile())
+	if err != nil {
+		return 0, false
+	}
+	pid, err := atoi(strings.TrimSpace(string(b)))
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	return pid, true
+}
+
+// processAlive reports whether a PID is a running process owned by us.
+// `kill -0` is the standard probe; ESRCH means the process is gone.
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	return syscall.Kill(pid, 0) == nil
+}
+
+func reachable(port int) bool {
+	url := fmt.Sprintf("http://127.0.0.1:%d/status", port)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	resp, err := core.HTTPClient.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == 200
+}
+
+// runBridgeStatus probes the local bridge's /status endpoint and exits
+// with a code that scripts (and the skill prompt) can branch on:
+//
+//	0  extension connected
+//	1  bridge running, no extension
+//	2  bridge unreachable (not running or wrong port)
+//
+// Plain stdout: "connected" / "not connected" / "bridge not running".
+// With --json: emits {connected, reachable, port}.
+func runBridgeStatus(args []string) error {
+	port := bridge.DefaultPort
+	asJSON := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--port":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--port needs a value")
+			}
+			n, err := atoi(args[i])
+			if err != nil || n <= 0 || n > 65535 {
+				return fmt.Errorf("--port: invalid value %q", args[i])
+			}
+			port = n
+		case "--json":
+			asJSON = true
+		case "-h", "--help":
+			fmt.Print(`socialfetch bridge status — probe the local bridge
+
+Exits 0 if the extension is connected, 1 if the bridge is up but no
+extension is attached, 2 if the bridge isn't reachable. Useful from
+agents/skills as a precheck before fetching authenticated URLs.
+
+Usage:
+  socialfetch bridge status [--port N] [--json]
+`)
+			return nil
+		default:
+			return fmt.Errorf("bridge status: unknown argument %q", args[i])
+		}
+	}
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/status", port)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	resp, err := core.HTTPClient.Do(req)
+	if err != nil {
+		printStatus(asJSON, false, false, port)
+		os.Exit(2)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Connected bool `json:"connected"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+
+	printStatus(asJSON, true, body.Connected, port)
+	if body.Connected {
+		return nil
+	}
+	os.Exit(1)
+	return nil
+}
+
+func printStatus(asJSON, reachable, connected bool, port int) {
+	if asJSON {
+		out, _ := json.Marshal(map[string]any{
+			"reachable": reachable,
+			"connected": connected,
+			"port":      port,
+		})
+		fmt.Println(string(out))
+		return
+	}
+	switch {
+	case !reachable:
+		fmt.Printf("bridge not running on :%d\n", port)
+	case connected:
+		fmt.Println("connected")
+	default:
+		fmt.Println("not connected")
+	}
+}
+
 func signalContext(timeout time.Duration) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
@@ -841,6 +1225,7 @@ func printUsage(w io.Writer) {
 USAGE
   socialfetch fetch  <url> [<url>...] [flags]
   socialfetch search "<query>" [flags]
+  socialfetch bridge {start|stop|status|run}  control browser-extension bridge
   socialfetch list                            list fetch + search providers
   socialfetch help [fetch|search|list]        same as --help on a subcommand
   socialfetch version                         print version

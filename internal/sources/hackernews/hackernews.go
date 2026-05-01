@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/patrickdebois/social-skills/internal/core"
+	"github.com/patrickdebois/social-skills/internal/htmlmd"
 )
 
 const defaultBaseURL = "https://hacker-news.firebaseio.com/v0"
@@ -125,7 +126,7 @@ func (f *Fetcher) Fetch(ctx context.Context, raw string, opts core.Options) (*co
 		Author:      story.By,
 		AuthorURL:   "https://news.ycombinator.com/user?id=" + story.By,
 		Published:   &published,
-		Summary:     story.Text,
+		Summary:     htmlmd.Convert(story.Text),
 		Score:       story.Score,
 		Comments:    comments,
 		FetchedAt:   time.Now().UTC(),
@@ -206,7 +207,7 @@ func (f *Fetcher) fetchComment(ctx context.Context, id, depth int) (*core.Commen
 	c := &core.Comment{
 		ID:        strconv.FormatInt(item.ID, 10),
 		Author:    item.By,
-		Body:      item.Text,
+		Body:      htmlmd.Convert(item.Text),
 		Published: &t,
 		Depth:     depth,
 		Replies:   f.fetchKids(ctx, item.Kids, depth+1),

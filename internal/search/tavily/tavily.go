@@ -94,6 +94,14 @@ func (p *Provider) Search(ctx context.Context, query string, opts search.Options
 		}
 	}
 
+	// Tavily's upstream `days` filter is only honored when topic="news",
+	// but switching to news tanks recall on non-news queries (people
+	// names, evergreen pages). Default to "general" and rely on the
+	// client-side post-filter below for strictness. Users who *want*
+	// strict upstream filtering can set TAVILY_TOPIC=news or override
+	// Provider.Topic — they trade recall for a guaranteed window.
+	topic := pickFirst(p.Topic, os.Getenv("TAVILY_TOPIC"), "general")
+
 	include := append([]string{}, p.IncludeDomains...)
 	include = append(include, opts.IncludeDomains...)
 	exclude := append([]string{}, p.ExcludeDomains...)
@@ -103,7 +111,7 @@ func (p *Provider) Search(ctx context.Context, query string, opts search.Options
 		APIKey:         key,
 		Query:          query,
 		SearchDepth:    pickFirst(p.Depth, "advanced"),
-		Topic:          pickFirst(p.Topic, "general"),
+		Topic:          topic,
 		MaxResults:     max,
 		IncludeAnswer:  false,
 		Days:           days,
@@ -137,14 +145,49 @@ func (p *Provider) Search(ctx context.Context, query string, opts search.Options
 
 	results := make([]search.Result, 0, len(out.Results))
 	for _, r := range out.Results {
+		pub := parsePublished(r.PublishedDate)
+		// Defensive client-side filter: Tavily's window can leak a few
+		// older items, and `topic="news"` indexes a narrower set of sites
+		// — drop anything clearly outside the requested range when we
+		// have a date to compare. Results without a date are kept (we
+		// can't prove they're stale).
+		if pub != nil {
+			if opts.After != nil && pub.Before(*opts.After) {
+				continue
+			}
+			if opts.Before != nil && pub.After(*opts.Before) {
+				continue
+			}
+		}
 		results = append(results, search.Result{
-			Title:   r.Title,
-			URL:     r.URL,
-			Snippet: snippet(r.Content, 500),
-			Source:  "tavily",
+			Title:     r.Title,
+			URL:       r.URL,
+			Snippet:   snippet(r.Content, 500),
+			Source:    "tavily",
+			Published: pub,
 		})
 	}
 	return results, nil
+}
+
+// parsePublished accepts the formats Tavily emits in published_date
+// (typically "2006-01-02" or RFC3339). Returns nil if the string is
+// missing or unparseable.
+func parsePublished(s string) *time.Time {
+	if s == "" {
+		return nil
+	}
+	for _, layout := range []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05Z",
+		"2006-01-02",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			u := t.UTC()
+			return &u
+		}
+	}
+	return nil
 }
 
 func pickFirst(values ...string) string {

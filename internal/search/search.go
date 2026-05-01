@@ -12,10 +12,11 @@ import (
 
 // Result is one search hit.
 type Result struct {
-	Title   string `json:"title"`
-	URL     string `json:"url"`
-	Snippet string `json:"snippet,omitempty"`
-	Source  string `json:"source"`
+	Title     string     `json:"title"`
+	URL       string     `json:"url"`
+	Snippet   string     `json:"snippet,omitempty"`
+	Source    string     `json:"source"`
+	Published *time.Time `json:"published,omitempty"`
 }
 
 // Options shape a single search call. Date and domain filters are

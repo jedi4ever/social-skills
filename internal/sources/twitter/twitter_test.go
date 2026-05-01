@@ -93,6 +93,12 @@ func TestFetchViaV2API(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer BEARER" {
 			t.Errorf("missing/wrong bearer: %q", r.Header.Get("Authorization"))
 		}
+		if strings.HasPrefix(r.URL.Path, "/tweets/search/recent") {
+			// reply_count=2 triggers a follow-up search; serve an empty
+			// page so the main-tweet assertions stay focused.
+			fmt.Fprint(w, `{"data":[],"meta":{"result_count":0}}`)
+			return
+		}
 		if !strings.Contains(r.URL.Path, "/tweets/77") {
 			t.Errorf("wrong endpoint: %s", r.URL.Path)
 		}
@@ -136,6 +142,137 @@ func TestFetchViaV2API(t *testing.T) {
 	}
 	if got := item.Extra["via"]; got != "v2_api" {
 		t.Errorf("expected via=v2_api, got %v", got)
+	}
+}
+
+// With creds set and IncludeComments=true, the v2 path should issue one
+// search/recent call after the main fetch and assemble a reply tree.
+func TestFetchViaV2APIWithReplies(t *testing.T) {
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"token_type":"bearer","access_token":"BEARER"}`))
+	}))
+	defer tokenSrv.Close()
+
+	var searchCalls int
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/tweets/search/recent"):
+			searchCalls++
+			if got := r.URL.Query().Get("query"); got != "conversation_id:77" {
+				t.Errorf("wrong query: %q", got)
+			}
+			fmt.Fprint(w, `{
+			  "data": [
+			    {"id":"100","author_id":"u2","text":"reply A","created_at":"2026-04-01T12:01:00.000Z","public_metrics":{"like_count":3},"referenced_tweets":[{"type":"replied_to","id":"77"}]},
+			    {"id":"101","author_id":"u3","text":"reply B","created_at":"2026-04-01T12:02:00.000Z","public_metrics":{"like_count":1},"referenced_tweets":[{"type":"replied_to","id":"77"}]},
+			    {"id":"200","author_id":"u4","text":"nested under A","created_at":"2026-04-01T12:03:00.000Z","public_metrics":{"like_count":0},"referenced_tweets":[{"type":"replied_to","id":"100"}]}
+			  ],
+			  "includes": {"users":[
+			    {"id":"u2","name":"Bob","username":"bob"},
+			    {"id":"u3","name":"Carol","username":"carol"},
+			    {"id":"u4","name":"Dan","username":"dan"}
+			  ]},
+			  "meta": {"result_count": 3}
+			}`)
+		case strings.Contains(r.URL.Path, "/tweets/77"):
+			fmt.Fprint(w, `{
+			  "data": {
+			    "id": "77", "author_id": "u1", "conversation_id": "77",
+			    "text": "root tweet",
+			    "created_at": "2026-04-01T12:00:00.000Z",
+			    "lang": "en",
+			    "public_metrics": {"like_count": 99, "retweet_count": 1, "reply_count": 3}
+			  },
+			  "includes": {"users":[{"id":"u1","name":"Jane","username":"jane"}]}
+			}`)
+		default:
+			http.Error(w, "unexpected: "+r.URL.Path, 404)
+		}
+	}))
+	defer apiSrv.Close()
+
+	prev := xauth.TokenURL
+	xauth.TokenURL = tokenSrv.URL
+	defer func() { xauth.TokenURL = prev }()
+	xauth.ResetCache()
+
+	f := New()
+	f.APIBaseURL = apiSrv.URL
+	f.BaseURL = "http://127.0.0.1:1"
+	f.Creds = xauth.Credentials{Key: "k", Secret: "s"}
+
+	item, err := f.Fetch(context.Background(), "https://x.com/jane/status/77", core.DefaultOptions())
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if searchCalls != 1 {
+		t.Errorf("expected 1 search call, got %d", searchCalls)
+	}
+	if got := len(item.Comments); got != 2 {
+		t.Fatalf("want 2 top-level comments, got %d", got)
+	}
+	// Reply A (id=100) should have one nested reply (id=200).
+	var a *core.Comment
+	for i := range item.Comments {
+		if item.Comments[i].ID == "100" {
+			a = &item.Comments[i]
+			break
+		}
+	}
+	if a == nil {
+		t.Fatalf("comment 100 not found")
+	}
+	if got := len(a.Replies); got != 1 || a.Replies[0].ID != "200" {
+		t.Errorf("nested reply not built: %+v", a.Replies)
+	}
+	if a.Replies[0].Depth != 1 {
+		t.Errorf("nested depth = %d, want 1", a.Replies[0].Depth)
+	}
+	if !strings.Contains(a.Author, "Bob") || !strings.Contains(a.Author, "@bob") {
+		t.Errorf("author format: %q", a.Author)
+	}
+}
+
+// IncludeComments=false should skip the search call entirely.
+func TestFetchViaV2APINoReplies(t *testing.T) {
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"token_type":"bearer","access_token":"BEARER"}`))
+	}))
+	defer tokenSrv.Close()
+
+	var searchCalls int
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/tweets/search/recent") {
+			searchCalls++
+		}
+		if strings.HasPrefix(r.URL.Path, "/tweets/search/recent") {
+			fmt.Fprint(w, `{"data":[],"meta":{"result_count":0}}`)
+			return
+		}
+		fmt.Fprint(w, `{
+		  "data":{"id":"77","author_id":"u1","conversation_id":"77","text":"root","created_at":"2026-04-01T12:00:00.000Z","public_metrics":{"like_count":1,"reply_count":3}},
+		  "includes":{"users":[{"id":"u1","name":"Jane","username":"jane"}]}
+		}`)
+	}))
+	defer apiSrv.Close()
+
+	prev := xauth.TokenURL
+	xauth.TokenURL = tokenSrv.URL
+	defer func() { xauth.TokenURL = prev }()
+	xauth.ResetCache()
+
+	f := New()
+	f.APIBaseURL = apiSrv.URL
+	f.BaseURL = "http://127.0.0.1:1"
+	f.Creds = xauth.Credentials{Key: "k", Secret: "s"}
+
+	opts := core.DefaultOptions()
+	opts.IncludeComments = false
+	if _, err := f.Fetch(context.Background(), "https://x.com/jane/status/77", opts); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if searchCalls != 0 {
+		t.Errorf("search called %d times with IncludeComments=false", searchCalls)
 	}
 }
 
