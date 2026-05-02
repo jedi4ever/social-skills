@@ -17,7 +17,7 @@ SKILL_INSTALL_DIR ?= $(HOME)/.claude/skills/socialfetch
 
 .PHONY: all help build install test test-live test-cover vet fmt lint run demo clean cli-help \
         skill-build skill-install skill-clean skill-package claude-extension-package extension-validate \
-        bridge-package plugin-build plugin-package
+        bridge-package plugin-build plugin-package gh-sync-secrets gh-sync-secrets-dry
 
 # Staging dir used when building the redistributable skill zip. Wiped
 # before each package run and again after the zip is sealed, so the
@@ -168,6 +168,12 @@ plugin-package: plugin-build  ## Package the Claude Code plugin as ./dist/social
 	rm -f "$$OUT"; \
 	(cd $(PLUGIN_DIR) && zip -qr "$$OUT" . -x "*.DS_Store" "bin/*" "node_modules/*"); \
 	echo "Packaged: dist/socialfetch-claude-code-plugin-$$VERSION.zip"
+
+gh-sync-secrets-dry:  ## Preview which .env keys would be uploaded to GitHub Actions secrets
+	@DRY_RUN=1 ./scripts/gh-sync-secrets.sh
+
+gh-sync-secrets:  ## Push API keys from .env to GitHub Actions secrets (powers .github/workflows/live.yml)
+	@./scripts/gh-sync-secrets.sh
 
 install:  ## go install into $GOBIN
 	go install ./cmd/socialfetch
