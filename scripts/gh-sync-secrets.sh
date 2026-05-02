@@ -15,8 +15,10 @@
 # you can run this against a partial .env without having to scrub
 # placeholders.
 #
-# Values are piped to `gh secret set --body -` via stdin instead of
-# being passed on argv, so they never appear in `ps` output.
+# Values are piped to `gh secret set` via stdin (omitting --body
+# triggers stdin-read; `--body -` would set the literal string "-")
+# instead of being passed on argv, so they never appear in `ps`
+# output.
 set -euo pipefail
 
 ENV_FILE="${1:-.env}"
@@ -88,7 +90,7 @@ for key in "${SECRETS[@]}"; do
     # gives an at-a-glance sanity check (typo'd vs full key).
     echo "DRY: would set $key (${#val} chars)"
   else
-    printf '%s' "$val" | gh secret set "$key" --body -
+    printf '%s' "$val" | gh secret set "$key"
     echo "set  $key"
   fi
   set_count=$((set_count + 1))
