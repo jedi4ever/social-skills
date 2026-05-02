@@ -49,9 +49,24 @@ func NewSearchRegistry(providers ...SearchProvider) *SearchRegistry {
 	return &SearchRegistry{providers: providers}
 }
 
+// searchAliases maps common synonyms to canonical provider names.
+// Picks up CLI users typing `-p twitter` (canonical is `x`) and
+// agents that infer the wrong name from a tool description. Keep the
+// list short — surface area to maintain. Lowercase keys + values.
+var searchAliases = map[string]string{
+	"twitter": "x",
+	"tweet":   "x",
+	"hn":      "hackernews",
+	"ddg":     "duckduckgo",
+	"bsky":    "bluesky",
+}
+
 // Get returns the named provider, or an error listing the known names.
 func (r *SearchRegistry) Get(name string) (SearchProvider, error) {
 	name = strings.ToLower(strings.TrimSpace(name))
+	if alias, ok := searchAliases[name]; ok {
+		name = alias
+	}
 	for _, p := range r.providers {
 		if strings.ToLower(p.Name()) == name {
 			return p, nil

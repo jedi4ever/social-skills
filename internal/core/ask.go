@@ -77,8 +77,24 @@ func NewAskRegistry(askers ...Asker) *AskRegistry {
 	return &AskRegistry{askers: askers}
 }
 
+// askAliases maps common synonyms to canonical ask provider names.
+// Lowercase keys + values. See SearchRegistry.searchAliases for the
+// rationale.
+var askAliases = map[string]string{
+	"claude":     "anthropic",
+	"gpt":        "openai",
+	"chatgpt":    "openai",
+	"sonar":      "perplexity",
+	"pplx":       "perplexity",
+	"gemini":     "google",
+	"xai":        "grok",
+}
+
 func (r *AskRegistry) Get(name string) (Asker, error) {
 	name = strings.ToLower(strings.TrimSpace(name))
+	if alias, ok := askAliases[name]; ok {
+		name = alias
+	}
 	for _, a := range r.askers {
 		if strings.EqualFold(a.Name(), name) {
 			return a, nil
