@@ -1,12 +1,13 @@
-// Package article handles HTML article pages — Medium, Substack, blog
-// posts, news sites, and anything else that exposes useful Open Graph or
+// Package article handles generic HTML article pages — blog posts,
+// news sites, and anything else that exposes useful Open Graph or
 // schema.org metadata. It's the catch-all fetcher: it claims any http(s)
 // URL not already grabbed by a more specific source.
 //
-// The fetcher itself is a thin shell: download the page, parse it with
-// htmlmeta, then dispatch to a host-specific extractor (Medium, Substack)
-// or fall back to the generic one. Adding a new host is just a new
-// Extractor implementation.
+// Per-host extractors (Medium, Substack) live in their own platform
+// packages alongside their bridge-aware fetchers. Those packages reuse
+// this package's BaseFromPage / RenderArticle helpers but own their
+// site-specific selectors. The article package itself only ships the
+// GenericExtractor.
 package article
 
 import (
@@ -15,35 +16,33 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/patrickdebois/social-skills/internal/core"
+	"github.com/patrickdebois/social-skills/internal/render/htmlmd"
 	"github.com/patrickdebois/social-skills/internal/util/htmlmeta"
 )
 
-// Extractor turns a parsed HTML page into a populated *core.Item. Each
-// Extractor decides which hosts it claims and how aggressively it
-// rewrites the article body — Medium-specific extractors strip "More
-// from author" sections, the generic one is conservative.
+// Extractor turns a parsed HTML page into a populated *core.Item. The
+// interface is exported so platform packages with their own extractors
+// (medium, substack) implement the same contract — useful when other
+// code wants to handle a heterogeneous list of extractors uniformly.
 type Extractor interface {
 	Name() string
 	Match(host string) bool
 	Extract(rawURL string, page *htmlmeta.Page) (*core.Item, error)
 }
 
-// Fetcher pulls a URL, parses it, and runs it through the first matching
-// Extractor. Extractors are tried in registration order; the generic one
-// is registered last so per-host ones win.
+// Fetcher pulls a URL, parses it, and runs it through GenericExtractor.
+// Per-host fetchers (medium, substack) are registered before this in
+// the top-level fetch registry so they claim their hosts first.
 type Fetcher struct {
-	extractors []Extractor
+	extractor Extractor
 }
 
 func New() *Fetcher {
 	return &Fetcher{
-		extractors: []Extractor{
-			&MediumExtractor{},
-			&SubstackExtractor{},
-			&GenericExtractor{},
-		},
+		extractor: &GenericExtractor{},
 	}
 }
 
@@ -60,6 +59,32 @@ func (Fetcher) Match(u *url.URL) bool {
 func (f *Fetcher) Fetch(ctx context.Context, raw string, opts core.Options) (*core.Item, error) {
 	ctx = core.WithAudit(ctx, opts.Audit)
 
+	// HTML2MD_READER=jina opts into a service-backed fetch path that
+	// runs the URL through r.jina.ai for cleaning. Useful when the
+	// site is behind Cloudflare or renders only via JS — Jina handles
+	// both. Skips the local GetBytes + htmlmeta parse + extractor
+	// chain entirely; we still build a metadata-bearing core.Item but
+	// the body comes pre-cleaned as markdown.
+	if reader := htmlmd.DefaultReader(); reader != nil {
+		opts.Audit.Logf("article: routing via service-backed reader")
+		md, err := reader.Read(ctx, raw)
+		if err != nil {
+			return nil, fmt.Errorf("article: %w", err)
+		}
+		return &core.Item{
+			Source:      "article",
+			Kind:        "article",
+			URL:         raw,
+			CanonicalID: raw,
+			Content:     strings.TrimSpace(md),
+			FetchedAt:   time.Now().UTC(),
+			Extra: map[string]any{
+				"requested_url": raw,
+				"via":           "reader",
+			},
+		}, nil
+	}
+
 	body, err := core.GetBytes(ctx, raw)
 	if err != nil {
 		return nil, fmt.Errorf("article: %w", err)
@@ -71,23 +96,16 @@ func (f *Fetcher) Fetch(ctx context.Context, raw string, opts core.Options) (*co
 
 	host := hostOf(raw)
 
-	// --generic-extraction forces the catch-all path even on hosts a
-	// specific extractor would claim. Useful for debugging when the
-	// host-specific output looks wrong, or for sites whose DOM has
-	// drifted from what the host extractor expects.
+	// --generic-extraction is now a no-op for this fetcher (the only
+	// extractor here IS the generic one) — kept as a logged signal so
+	// the audit trail still records the user's intent. Per-host
+	// extractors live in their own packages and have their own bypass.
 	if opts.GenericExtraction {
 		opts.Audit.Logf("article: forced generic extractor (host=%s)", host)
-		return (&GenericExtractor{}).Extract(raw, page)
+	} else {
+		opts.Audit.Logf("article: %s extractor", f.extractor.Name())
 	}
-
-	for _, ex := range f.extractors {
-		if ex.Match(host) {
-			opts.Audit.Logf("article: %s extractor", ex.Name())
-			return ex.Extract(raw, page)
-		}
-	}
-	// Generic claims everything, so reaching here means a misconfiguration.
-	return nil, fmt.Errorf("article: no extractor matched host %q", host)
+	return f.extractor.Extract(raw, page)
 }
 
 func hostOf(raw string) string {

@@ -18,18 +18,17 @@ import (
 	"github.com/patrickdebois/social-skills/internal/bridge"
 	"github.com/patrickdebois/social-skills/internal/core"
 	"github.com/patrickdebois/social-skills/internal/util/htmlmeta"
-	"github.com/patrickdebois/social-skills/internal/platforms/article"
 )
 
 type Fetcher struct {
 	BridgeURL string
-	Extractor *article.MediumExtractor
+	Extractor *Extractor
 }
 
 func New() *Fetcher {
 	return &Fetcher{
 		BridgeURL: bridge.DefaultEndpoint,
-		Extractor: &article.MediumExtractor{},
+		Extractor: &Extractor{},
 	}
 }
 

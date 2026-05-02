@@ -1,16 +1,17 @@
-package article
+package substack
 
 import (
 	"strings"
 
 	"github.com/patrickdebois/social-skills/internal/core"
+	"github.com/patrickdebois/social-skills/internal/platforms/article"
 	"github.com/patrickdebois/social-skills/internal/util/htmlmeta"
 )
 
-// substackArticleSelectors lists Substack's article body containers in
+// articleSelectors lists Substack's article body containers in
 // priority order. ".body.markup" is the rendered prose; ".available-content"
 // is what readers see before the paywall on locked posts.
-var substackArticleSelectors = []string{
+var articleSelectors = []string{
 	"div.body.markup",
 	".body.markup",
 	".available-content",
@@ -18,20 +19,25 @@ var substackArticleSelectors = []string{
 	"article",
 }
 
-// SubstackExtractor handles substack.com and any subdomain (newsletters
+// Extractor handles substack.com and any subdomain (newsletters
 // are usually `name.substack.com`, but custom domains exist too — those
 // fall back to the generic extractor unless someone wires a CNAME map).
-type SubstackExtractor struct{}
+//
+// Lives in this package so it can sit alongside the bridge-aware
+// fetcher that uses it. The article package's catch-all fetcher no
+// longer dispatches to a Substack extractor — substack.com URLs always
+// route through this package's Fetcher first.
+type Extractor struct{}
 
-func (*SubstackExtractor) Name() string { return "substack" }
+func (*Extractor) Name() string { return "substack" }
 
-func (*SubstackExtractor) Match(host string) bool {
+func (*Extractor) Match(host string) bool {
 	return host == "substack.com" || strings.HasSuffix(host, ".substack.com")
 }
 
-func (s *SubstackExtractor) Extract(rawURL string, page *htmlmeta.Page) (*core.Item, error) {
-	item := baseFromPage(rawURL, page, "substack")
-	item.Content = renderArticle(page, substackArticleSelectors, item.Summary)
+func (s *Extractor) Extract(rawURL string, page *htmlmeta.Page) (*core.Item, error) {
+	item := article.BaseFromPage(rawURL, page, "substack")
+	item.Content = article.RenderArticle(page, articleSelectors, item.Summary)
 
 	// Substack-specific extras: subtitle, publication name, like &
 	// comment counts. All optional.

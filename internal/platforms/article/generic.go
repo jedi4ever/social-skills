@@ -28,7 +28,7 @@ func (*GenericExtractor) Name() string                { return "generic" }
 func (*GenericExtractor) Match(host string) bool      { return true }
 
 func (g *GenericExtractor) Extract(rawURL string, page *htmlmeta.Page) (*core.Item, error) {
-	item := baseFromPage(rawURL, page, "article")
-	item.Content = renderArticle(page, genericArticleSelectors, item.Summary)
+	item := BaseFromPage(rawURL, page, "article")
+	item.Content = RenderArticle(page, genericArticleSelectors, item.Summary)
 	return item, nil
 }

@@ -9,14 +9,18 @@ import (
 	"github.com/patrickdebois/social-skills/internal/util/htmlmeta"
 )
 
-// baseFromPage builds the part of an Item that's identical across all
+// BaseFromPage builds the part of an Item that's identical across all
 // hosts: title/description/author/published/canonical/tags pulled from
 // og: tags and JSON-LD. Per-host extractors call this first and then
 // override or augment specific fields.
 //
+// Exported because the per-host extractors now live in their own
+// packages (internal/platforms/medium, internal/platforms/substack)
+// and call into the article package for the shared metadata logic.
+//
 // The returned Item has FetchedAt set, an empty Content, no Media, no
 // host-specific extras. Caller fills those in.
-func baseFromPage(rawURL string, page *htmlmeta.Page, sourceName string) *core.Item {
+func BaseFromPage(rawURL string, page *htmlmeta.Page, sourceName string) *core.Item {
 	title := pickFirst(page.Meta["og:title"], page.Title)
 	desc := pickFirst(page.Meta["og:description"], page.Meta["description"])
 	author := pickFirst(page.Meta["author"], page.Meta["article:author"])
@@ -66,10 +70,13 @@ func baseFromPage(rawURL string, page *htmlmeta.Page, sourceName string) *core.I
 	}
 }
 
-// renderArticle picks the best article container using the given
+// RenderArticle picks the best article container using the given
 // selector list, runs it through htmlmd, and returns clean markdown.
 // Falls back to the description when no usable HTML is found.
-func renderArticle(page *htmlmeta.Page, selectors []string, fallback string) string {
+//
+// Exported for use by per-host extractors in sibling packages
+// (medium, substack).
+func RenderArticle(page *htmlmeta.Page, selectors []string, fallback string) string {
 	html := htmlmeta.PickArticleHTML(page.Doc, selectors)
 	md := strings.TrimSpace(htmlmd.Convert(html))
 	if md == "" {

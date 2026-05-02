@@ -16,12 +16,12 @@ X_API_SECRET=...
 
 # Search & ask providers
 TAVILY_API_KEY=...
-BING_API_KEY=...
 SERPAPI_KEY=...
 BRAVE_API_KEY=...
 PERPLEXITY_API_KEY=...
 XAI_API_KEY=...
 OPENAI_API_KEY=...
+ANTHROPIC_API_KEY=...
 GEMINI_API_KEY=...                   # for `google` ask provider (or reuse GOOGLE_API_KEY)
 GOOGLE_API_KEY=...
 GOOGLE_CSE_ID=...
@@ -35,6 +35,8 @@ BLUESKY_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx
 # Optional knobs
 TAVILY_TOPIC=news                    # switch Tavily to news topic for stricter recency
 YOUTUBE_TRANSCRIPT_PROVIDER=auto     # auto | ytdlp | innertube | kkdai
+HTML2MD_PROVIDER=kaufmann            # kaufmann (default) | builtin (legacy hand-roll)
+HTML2MD_READER=local                 # local (default) | jina (route article fetches via r.jina.ai)
 ```
 
 ---
@@ -70,18 +72,6 @@ Free tier: 1,000 searches/month. Optional `TAVILY_TOPIC=news` env var switches t
 1. Go to **[api.search.brave.com](https://api.search.brave.com/)** → sign up.
 2. **Subscriptions** → pick the **Free** plan (2,000 queries/month, 1 q/sec).
 3. **API Keys** → copy.
-
----
-
-## Bing Web Search v7 — `BING_API_KEY`
-
-**Used by:** `bing` search provider.
-
-1. Go to **[portal.azure.com](https://portal.azure.com/)** → Cognitive Services.
-2. Create a **"Bing Search v7"** resource.
-3. **Keys and Endpoint** → copy Key 1.
-
-> Note: Microsoft has been retiring/migrating Bing Search v7. As of mid-2026 the resource is still creatable but availability varies by Azure region.
 
 ---
 
@@ -131,10 +121,35 @@ tool).
    pay-per-token, with an extra per-call fee for hosted tools like
    `web_search`.
 
-Default model: account default (we omit the `model` field so OpenAI
-picks the current latest GPT-tier model). Override with `-m gpt-5.5`
-(or whichever you want). Web search works with GPT-4-tier and later
-— older 3.5 models don't support the tool.
+Default model: `gpt-5.5` (auto-tracking alias for the latest 5.5
+snapshot). Override with `-m gpt-5.5-mini` for cheaper, or any other
+GPT-4-tier-or-later model. Web search isn't supported on 3.5-tier
+models. Unlike xAI, OpenAI's Responses API requires `model` at the
+request level (HTTP 400 if omitted).
+
+---
+
+## Anthropic Claude — `ANTHROPIC_API_KEY`
+
+**Used by:** `anthropic` ask provider (Messages API + built-in
+`web_search` server tool).
+
+1. Go to **[console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)** → sign in.
+2. **+ Create Key** → copy.
+3. Make sure your organization admin has **enabled Web Search** in the
+   Claude Console (Settings → Privacy). Without it, requests with the
+   `web_search_20250305` tool return an error pointing back to that
+   setting.
+
+Default model: `claude-sonnet-4-6` (good balance of cost + quality).
+Override with `-m claude-opus-4-7` (strongest reasoning) or `-m
+claude-haiku-4-5-20251001` (cheapest). Anthropic doesn't expose a
+generic "latest" alias — you'll need to bump the family number when
+new generations ship.
+
+Pricing: $10 per 1,000 web searches on top of normal token billing.
+Each search counts as one use regardless of result count; errored
+searches aren't billed.
 
 ---
 
@@ -189,6 +204,36 @@ Bluesky's `app.bsky.feed.searchPosts` requires an authenticated session. We do t
 > **Never use your account password.** App passwords are scoped, revocable from the same settings page, and don't expose your full account.
 
 ---
+
+## HTML→Markdown provider — `HTML2MD_PROVIDER`
+
+Not a key, a routing hint. Picks the local converter the article and
+per-host extractors use to turn HTML into clean markdown.
+
+| value | behavior |
+|---|---|
+| `kaufmann` (default) | wraps `github.com/JohannesKaufmann/html-to-markdown/v2` — actively maintained, good edge-case coverage (tables, strikethrough, complex code blocks) |
+| `builtin` | the legacy in-tree hand-roll — pure-Go, dependency-light, more aggressive about stripping layout chrome (nav/footer). Useful when you want to avoid the new dep or compare output. |
+
+Unknown values fall back to `kaufmann`.
+
+## HTML→Markdown reader — `HTML2MD_READER`
+
+Service-backed reader that replaces the local fetch+parse+convert
+pipeline for the generic article fetcher. When set, the article
+fetcher (`socialfetch fetch <any-url>` for non-host-specific URLs)
+sends the URL to the chosen service and uses its returned markdown
+verbatim.
+
+| value | behavior |
+|---|---|
+| `local` (default) | use the local fetch + extractor + Converter chain (no service call) |
+| `jina` | route fetches through `r.jina.ai/<url>` — sidesteps Cloudflare challenges and JS-rendered SPAs; no key needed for free tier |
+
+Per-host fetchers (medium, substack, hackernews, reddit, github,
+twitter, linkedin, youtube, bluesky, arxiv, rss) ignore this — they
+still use their own fetch paths, since they depend on parsed DOM /
+API responses that a markdown stream can't replace.
 
 ## YouTube transcript provider switch — `YOUTUBE_TRANSCRIPT_PROVIDER`
 

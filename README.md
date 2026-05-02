@@ -49,7 +49,7 @@ When you pass multiple URLs and `-f json`, the format is automatically promoted 
 
 | flag | meaning |
 | -- | -- |
-| `-p, --provider` | `duckduckgo` (default), `bing`, `brave`, `serpapi`, `tavily`, `x`, `youtube`, `bluesky`, `arxiv`, or `hackernews` |
+| `-p, --provider` | `duckduckgo` (default), `brave`, `serpapi`, `tavily`, `x`, `youtube`, `bluesky`, `arxiv`, or `hackernews` |
 | `-n, --max` | max results (default 10) |
 | `-f, --format` | `markdown` (default), `json`, or `jsonl` |
 | `-o, --output` | stdout or file |
@@ -58,7 +58,6 @@ When you pass multiple URLs and `-f json`, the format is automatically promoted 
 | provider | auth |
 | -- | -- |
 | `duckduckgo` | none (scrapes the lite endpoint) |
-| `bing`       | `BING_API_KEY` (Bing Web Search v7) |
 | `brave`      | `BRAVE_API_KEY` (free tier 2,000 q/mo; supports native `--last 7d` via the `freshness` parameter) |
 | `serpapi`    | `SERPAPI_KEY` |
 | `tavily`     | `TAVILY_API_KEY` (AI-tuned, scored, supports domain include/exclude) |
@@ -135,7 +134,6 @@ internal/htmlmd/        shared HTML→Markdown converter
 internal/render/        JSON / JSONL / Markdown renderers
 internal/search/        Search Provider interface + Registry
    duckduckgo/          lite-endpoint scraper, no auth
-   bing/                Bing Web Search v7 API client (gated on BING_API_KEY)
    serpapi/             SerpAPI client (gated on SERPAPI_KEY)
    tavily/              Tavily AI-tuned web search (gated on TAVILY_API_KEY)
    xsearch/             X v2 recent-search via OAuth2 app-only

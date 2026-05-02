@@ -60,10 +60,11 @@ search.
 `--last` is best-effort on DDG. For strict date windows use Brave,
 YouTube, Bluesky, X, HN, or arXiv — those have native date filters.
 
-**Bing Search v7 is being retired.**
-Microsoft has been migrating it out of Cognitive Services since 2025.
-The resource is still creatable but availability varies by Azure
-region. If you're starting fresh, prefer Brave or Tavily.
+**Bing Search v7 is removed from socialfetch.**
+Microsoft has been migrating it out of Cognitive Services since 2025
+and we removed the `bing` provider in 0.2.0. A future Azure-backed
+ask provider will replace it. If you need a paid web search today,
+use Brave, SerpAPI, or Tavily.
 
 ---
 
@@ -108,7 +109,7 @@ Exit codes: `0` connected / `1` not connected / `2` bridge not running.
 | OpenAI `web_search` tool | per-invocation fee + token usage | long agent loops compound fast |
 | Grok `web_search` tool | per-tool-invocation fee + token usage | same |
 | Google CSE | $5 per 1k after first 100/day | silent transition from free to paid at request 101 |
-| Bing v7 | Azure metered (per region) | quota tied to Azure billing, not a flat cap |
+| Anthropic `web_search` tool | $10 per 1k searches + token usage | larger questions trigger 3-5 searches per call |
 
 ---
 

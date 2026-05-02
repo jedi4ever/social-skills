@@ -1,16 +1,17 @@
-package article
+package medium
 
 import (
 	"strings"
 
 	"github.com/patrickdebois/social-skills/internal/core"
+	"github.com/patrickdebois/social-skills/internal/platforms/article"
 	"github.com/patrickdebois/social-skills/internal/util/htmlmeta"
 )
 
-// mediumArticleSelectors lists the containers Medium articles use, in
+// articleSelectors lists the containers Medium articles use, in
 // priority order. ".pw-post-body-paragraph" is the modern container;
 // "article" and "[data-post-id]" cover legacy and minimal layouts.
-var mediumArticleSelectors = []string{
+var articleSelectors = []string{
 	"section.pw-post-body",
 	"article.meteredContent",
 	"article",
@@ -18,22 +19,27 @@ var mediumArticleSelectors = []string{
 	"[data-post-id]",
 }
 
-// MediumExtractor is tuned for medium.com (and sub-domains like
+// Extractor is tuned for medium.com (and sub-domains like
 // `username.medium.com`, `engineering.medium.com`, custom publication
 // domains delegated to Medium). It uses Medium-specific selectors for
 // the article body and pulls clap/response counts from the byline UI.
-type MediumExtractor struct{}
+//
+// Lives in this package so it can sit alongside the bridge-aware
+// fetcher that uses it. The article package's catch-all fetcher no
+// longer dispatches to a Medium extractor — medium.com URLs always
+// route through this package's Fetcher first.
+type Extractor struct{}
 
-func (*MediumExtractor) Name() string { return "medium" }
+func (*Extractor) Name() string { return "medium" }
 
-func (*MediumExtractor) Match(host string) bool {
+func (*Extractor) Match(host string) bool {
 	return host == "medium.com" ||
 		strings.HasSuffix(host, ".medium.com")
 }
 
-func (m *MediumExtractor) Extract(rawURL string, page *htmlmeta.Page) (*core.Item, error) {
-	item := baseFromPage(rawURL, page, "medium")
-	item.Content = renderArticle(page, mediumArticleSelectors, item.Summary)
+func (m *Extractor) Extract(rawURL string, page *htmlmeta.Page) (*core.Item, error) {
+	item := article.BaseFromPage(rawURL, page, "medium")
+	item.Content = article.RenderArticle(page, articleSelectors, item.Summary)
 
 	// Medium-specific extras live on the byline / footer UI. All optional
 	// — missing values don't break the item.

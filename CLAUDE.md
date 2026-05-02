@@ -115,3 +115,19 @@ sections in:
 Same rule for the in-binary help text in `cmd/socialfetch/main.go`
 (`printAskHelp`, `printSearchHelp`, etc.) — `socialfetch help` is the
 authoritative reference, so a feature with no help text is invisible.
+
+## Versioning
+
+`cmd/socialfetch/main.go` declares a `Version` constant that's
+surfaced via `socialfetch version` and the top of `socialfetch help`.
+**Bump it on every user-visible release** — new subcommand, new
+provider, new flag, removed flag, behaviour change a downstream user
+would notice. Bug fixes that don't change behaviour can ride along on
+the next feature bump.
+
+We follow loose semver: `MAJOR.MINOR.PATCH`. MAJOR for breaking CLI
+changes (removed flags, renamed subcommands), MINOR for additive
+changes (new provider, new flag), PATCH for bug fixes only. The
+constant lives at the top of `cmd/socialfetch/main.go` next to the
+imports — easy to find when you're already editing the file for
+something else.

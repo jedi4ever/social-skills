@@ -98,7 +98,7 @@ func fetchToken(ctx context.Context, c Credentials) (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("xauth: token endpoint returned HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("xauth: token endpoint returned HTTP %d: %s", resp.StatusCode, core.HTTPErrorBody(resp))
 	}
 	var out struct {
 		TokenType   string `json:"token_type"`

@@ -1,9 +1,9 @@
 - Google search, ask
-- Perplexity
 - Throttle / random timing extension
 - Name of project - socialfetch - social-curl?
 - Publish as skill
-- Homebre
+- Homebrew
+- turn it into a library
 - Rename extension / extension permissions
 - Which HTML to Markdown / use library ?
 

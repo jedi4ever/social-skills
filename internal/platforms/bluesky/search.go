@@ -227,7 +227,7 @@ func (p *SearchProvider) session(ctx context.Context) (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("bluesky session: HTTP %d (check BLUESKY_HANDLE / BLUESKY_APP_PASSWORD)", resp.StatusCode)
+		return "", fmt.Errorf("bluesky session: HTTP %d: %s (check BLUESKY_HANDLE / BLUESKY_APP_PASSWORD)", resp.StatusCode, core.HTTPErrorBody(resp))
 	}
 	var sess struct {
 		AccessJwt string `json:"accessJwt"`

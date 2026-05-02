@@ -35,9 +35,9 @@ import (
 	"github.com/patrickdebois/social-skills/internal/util/dotenv"
 	"github.com/patrickdebois/social-skills/internal/render"
 
+	"github.com/patrickdebois/social-skills/internal/platforms/anthropic"
 	"github.com/patrickdebois/social-skills/internal/platforms/article"
 	"github.com/patrickdebois/social-skills/internal/platforms/arxiv"
-	"github.com/patrickdebois/social-skills/internal/platforms/bing"
 	"github.com/patrickdebois/social-skills/internal/platforms/bluesky"
 	"github.com/patrickdebois/social-skills/internal/platforms/brave"
 	"github.com/patrickdebois/social-skills/internal/platforms/duckduckgo"
@@ -58,6 +58,77 @@ import (
 	"github.com/patrickdebois/social-skills/internal/platforms/youtube"
 )
 
+// Version is the user-visible socialfetch version. Bump this on every
+// user-visible release. See CLAUDE.md "Versioning" for the rule.
+const Version = "0.2.0"
+
+// defaultAskChain is the fallback order used by `-p auto`. Cheap +
+// reliable first (perplexity has the highest hit rate on grounded
+// questions in our experience), graceful degradation through the
+// rest. SerpAPI and Tavily go last because their answers tend to be
+// shallower than the LLM-grounded providers.
+var defaultAskChain = []string{
+	"perplexity", "grok", "openai", "anthropic", "google", "tavily", "serpapi",
+}
+
+// defaultSearchChain is the fallback order used by `-p auto` for the
+// search subcommand. Tavily first (highest signal-to-noise on
+// AI-tuned queries), then Brave (paid but no quota cliff), then
+// SerpAPI (cheap free tier), DuckDuckGo last (no auth, but ranking
+// quality varies).
+var defaultSearchChain = []string{
+	"tavily", "brave", "serpapi", "duckduckgo",
+}
+
+// resolveAsker picks an Asker from the user-supplied -p / --fallback
+// expression:
+//
+//   - "perplexity"        → that single provider
+//   - "auto"              → defaultAskChain (in order, falling through)
+//   - "perplexity,grok"   → comma-list interpreted as a custom chain
+//
+// A single-provider name still goes through the chain machinery when
+// it contains a comma, so behaviour is consistent. Single-name
+// "auto"-but-no-comma doesn't allocate a chain.
+func resolveAsker(expr string) (core.Asker, error) {
+	reg := buildAskers()
+	expr = strings.TrimSpace(expr)
+	if strings.EqualFold(expr, "auto") {
+		return core.NewAskChain(reg, defaultAskChain)
+	}
+	if strings.Contains(expr, ",") {
+		parts := splitAndTrim(expr, ",")
+		return core.NewAskChain(reg, parts)
+	}
+	return reg.Get(expr)
+}
+
+// resolveSearcher mirrors resolveAsker for the search subcommand.
+func resolveSearcher(expr string) (core.SearchProvider, error) {
+	_, reg := buildRegistries()
+	expr = strings.TrimSpace(expr)
+	if strings.EqualFold(expr, "auto") {
+		return core.NewSearchChain(reg, defaultSearchChain)
+	}
+	if strings.Contains(expr, ",") {
+		parts := splitAndTrim(expr, ",")
+		return core.NewSearchChain(reg, parts)
+	}
+	return reg.Get(expr)
+}
+
+func splitAndTrim(s, sep string) []string {
+	raw := strings.Split(s, sep)
+	out := make([]string, 0, len(raw))
+	for _, p := range raw {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // buildAskers returns the registry of "answer engines" used by the
 // `ask` subcommand. Kept separate from search because the conceptual
 // shape (synthesized answer + sources) differs from a flat result list.
@@ -66,6 +137,7 @@ func buildAskers() *core.AskRegistry {
 		perplexity.New(),
 		grok.New(),
 		openai.New(),
+		anthropic.New(),
 		google.NewAsker(),
 		tavily.NewAsker(),
 		serpapi.NewAsker(),
@@ -96,7 +168,6 @@ func buildRegistries() (*core.Registry, *core.SearchRegistry) {
 	searchers := core.NewSearchRegistry(
 		duckduckgo.New(),
 		google.New(),
-		bing.New(),
 		brave.New(),
 		serpapi.New(),
 		tavily.New(),
@@ -198,7 +269,7 @@ func run(args []string) error {
 	case "help", "-h", "--help":
 		return runHelp(rest)
 	case "version", "--version":
-		fmt.Println("socialfetch 0.1.0")
+		fmt.Println("socialfetch " + Version)
 		return nil
 	default:
 		printUsage(os.Stderr)
@@ -642,8 +713,7 @@ func runSearch(args []string) error {
 	}
 	defer closeAudit()
 
-	_, searchers := buildRegistries()
-	provider, err := searchers.Get(flags.provider)
+	provider, err := resolveSearcher(flags.provider)
 	if err != nil {
 		return err
 	}
@@ -791,7 +861,7 @@ func runAsk(args []string) error {
 	}
 	defer closeAudit()
 
-	asker, err := buildAskers().Get(provider)
+	asker, err := resolveAsker(provider)
 	if err != nil {
 		return err
 	}
@@ -875,7 +945,14 @@ Usage:
   socialfetch ask "<question>" [flags]
 
 Flags:
-  -p, --provider     NAME    perplexity (default), grok, openai, google, tavily, serpapi
+  -p, --provider     NAME    perplexity (default), grok, openai, anthropic, google, tavily, serpapi
+                             special values:
+                               auto             try the built-in chain in order
+                                                (perplexity → grok → openai → anthropic →
+                                                 google → tavily → serpapi)
+                               name1,name2,…    comma-list of providers to try in order;
+                                                each falls through on missing key, error,
+                                                or empty answer
   -m, --model        MODEL   override the provider's default; empty lets the
                              provider's API pick (recommended)
       --last         W       restrict the search horizon: day, week, month, year
@@ -893,6 +970,7 @@ Auth:
   perplexity   PERPLEXITY_API_KEY (or PPLX_API_KEY)
   grok         XAI_API_KEY (or GROK_API_KEY)
   openai       OPENAI_API_KEY
+  anthropic    ANTHROPIC_API_KEY
   google       GEMINI_API_KEY (or GOOGLE_API_KEY)
   tavily       TAVILY_API_KEY
   serpapi      SERPAPI_KEY
@@ -1070,8 +1148,6 @@ func searchAuthHint(name string) string {
 		return "(no auth)"
 	case "google":
 		return "(requires GOOGLE_API_KEY + GOOGLE_CSE_ID; 100 q/day free)"
-	case "bing":
-		return "(requires BING_API_KEY; Azure Cognitive Services)"
 	case "brave":
 		return "(requires BRAVE_API_KEY; native --last 7d via freshness)"
 	case "serpapi":
@@ -1632,13 +1708,13 @@ func searchTableString() string {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintf(w, `socialfetch — fetch social-media URLs and run search queries
+	fmt.Fprintf(w, `socialfetch %s — fetch social-media URLs and run search queries
 
 USAGE
   socialfetch fetch    <url> [<url>...] [flags]
   socialfetch search   "<query>" [flags]
   socialfetch timeline <user-or-url> [flags]   recent activity for a user (X / LinkedIn)
-  socialfetch ask      "<question>" [flags]    grounded answer engine (perplexity, grok, openai, google, tavily, serpapi)
+  socialfetch ask      "<question>" [flags]    grounded answer engine (perplexity, grok, openai, anthropic, google, tavily, serpapi)
   socialfetch monitor  [flags]                 live tail of the global audit log
   socialfetch bridge   {start|stop|status|run}  control browser-extension bridge
   socialfetch list                              list fetch + search providers
@@ -1694,7 +1770,7 @@ NOTES FOR AGENTS
   - With multiple URLs and -f json, output is auto-promoted to jsonl.
   - --log - prints which URL was fetched and any redirects to stderr.
   - 'socialfetch list' prints the fetch + search providers in machine-friendly form.
-`, fetchTableString(), searchTableString())
+`, Version, fetchTableString(), searchTableString())
 }
 
 func printFetchHelp(w io.Writer) {
