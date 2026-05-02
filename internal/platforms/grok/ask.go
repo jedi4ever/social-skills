@@ -127,7 +127,7 @@ func (p *Provider) Ask(ctx context.Context, question string, opts core.AskOption
 		return nil, fmt.Errorf("grok: HTTP 429 — rate limit")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("grok: HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("grok: HTTP %d: %s", resp.StatusCode, core.HTTPErrorBody(resp))
 	}
 
 	var data response
