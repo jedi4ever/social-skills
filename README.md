@@ -340,6 +340,35 @@ Three transcript backends, switchable via `YOUTUBE_TRANSCRIPT_PROVIDER`:
 
 `auto` (default) tries them in order yt-dlp → innertube → kkdai.
 
+## HTML → Markdown (and Jina Reader fallback)
+
+For the catch-all `article` fetcher and any HTML-rendering source,
+two knobs control how the page becomes markdown the agent can read:
+
+### Converter (`HTML2MD_PROVIDER`)
+
+| value | how |
+|---|---|
+| `kaufmann` (default) | library-backed converter — handles tables, code blocks, nested lists, and inline formatting that the older converter would flatten. |
+| `builtin` | legacy hand-rolled walker — kept as a fallback for the rare case where `kaufmann` mis-renders something. |
+
+### Reader (`HTML2MD_READER`)
+
+Where the HTML comes from in the first place:
+
+| value | how |
+|---|---|
+| `local` (default) | direct HTTP `GET` from your machine — fastest, full control over headers/cookies. |
+| `jina` | routes the fetch through [`r.jina.ai`](https://jina.ai/reader) — Jina's Reader proxy renders the page (JS executes, Cloudflare challenges resolve) and returns clean markdown. Use when a site is otherwise unreachable to a plain HTTP client. |
+
+Set `JINA_API_KEY` if you want higher rate limits than the free
+tier — the free tier works without a key but caps aggressively.
+
+The `article` fetcher also auto-detects Cloudflare bot challenges
+on a `local` fetch and falls back to Jina Reader on its own (no
+config required) — `HTML2MD_READER=jina` only forces Jina for
+*every* generic article fetch.
+
 ## Credentials
 
 All API keys are **optional** — features gated on a missing key
