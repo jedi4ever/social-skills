@@ -73,11 +73,18 @@ echo 'TAVILY_API_KEY=...' >> ~/.claude/skills/socialfetch/.env
 # OR put it in any directory you launch Claude Desktop from.
 ```
 
-The binary loads, in order, **without overriding shell env vars**:
+The binary loads, in order, **without overriding shell env vars**, by
+walking up from two starting points (up to 4 levels, stopping at
+`$HOME` or filesystem root):
 
-1. `./.env` (current working directory)
-2. `<binary_dir>/.env` (next to the installed binary — typically
-   `~/.claude/skills/socialfetch/.env`)
+1. **Current working directory upward** — running from any subdir of
+   a project with a root `.env` finds it (e.g. cwd
+   `~/dev/myapp/scripts/` walks up to `~/dev/myapp/.env`).
+2. **Binary location upward** — handles the skill install layout
+   `~/.claude/skills/socialfetch/scripts/socialfetch` finding
+   `~/.claude/skills/socialfetch/.env` one level up. The exact path
+   `~/.claude/skills/socialfetch/.env` is what the install
+   instructions below assume.
 
 See [API_KEYS.md](API_KEYS.md) for the full list of supported keys and where
 to obtain each one. Free tier coverage:
