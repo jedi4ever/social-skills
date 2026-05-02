@@ -1,0 +1,156 @@
+name: release
+
+# Builds + uploads release artifacts when you push a `v<version>`
+# tag (e.g. `git tag v0.8.3 && git push --tags`). Artifacts:
+#
+#   - socialfetch-<version>-<os>-<arch>.{tar.gz,zip}     bare binaries
+#       darwin/arm64, darwin/amd64, linux/amd64, windows/amd64
+#   - socialfetch-claude-extension-<version>-darwin-arm64.mcpb
+#       Claude Desktop Extension (drag into Settings → Extensions)
+#   - socialfetch-skill-<version>.zip
+#       Standalone skill bundle (~/.claude/skills/socialfetch/)
+#   - socialfetch-claude-code-plugin-<version>.zip
+#       Claude Code plugin bundle (no binary; user provides PATH)
+#   - socialfetch-chrome-extension-<version>.zip
+#       Chrome browser-bridge extension (independent version,
+#       read from chrome-extension/manifest.json at package time)
+#
+# A separate `live` workflow auto-runs against the published release
+# (release.published trigger) so provider compatibility is verified
+# end-to-end immediately after the release goes out.
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write   # required by softprops/action-gh-release to create the release
+
+jobs:
+  release:
+    name: build + publish ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node (for mcpb validator)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Resolve version from tag
+        # Strip the leading `v` so the tag name `v0.8.3` becomes
+        # `0.8.3` — matches the format declared in
+        # cmd/socialfetch/main.go's Version constant and used in
+        # all our existing artifact filenames.
+        id: ver
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Sanity — tag matches binary version
+        # Catches the easy mistake of tagging without bumping
+        # cmd/socialfetch/main.go's Version constant. We don't want
+        # to ship a `v0.9.0` release whose binary still reports
+        # `socialfetch 0.8.2`.
+        run: |
+          set -euo pipefail
+          go build -o /tmp/sf ./cmd/socialfetch
+          actual=$(/tmp/sf version | awk '{print $2}')
+          expected="${{ steps.ver.outputs.value }}"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::error::tag is v$expected but binary reports $actual — bump cmd/socialfetch/main.go's Version constant"
+            exit 1
+          fi
+
+      - name: Cross-build binaries
+        # -trimpath + -ldflags="-s -w" matches the existing Makefile
+        # targets (smaller, reproducible). One static binary per
+        # platform, no cgo needed.
+        run: |
+          set -euo pipefail
+          mkdir -p dist/binaries
+          V="${{ steps.ver.outputs.value }}"
+          build() {
+            local os="$1" arch="$2" ext="${3:-}"
+            local dir="dist/binaries/socialfetch-${V}-${os}-${arch}"
+            mkdir -p "$dir"
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
+              go build -ldflags="-s -w" -trimpath \
+              -o "$dir/socialfetch${ext}" ./cmd/socialfetch
+            cp README.md INSTALL.md API_KEYS.md HINTS.md "$dir/"
+          }
+          build darwin  arm64
+          build darwin  amd64
+          build linux   amd64
+          build windows amd64 .exe
+
+      - name: Archive bare binaries (.tar.gz / .zip)
+        run: |
+          set -euo pipefail
+          cd dist/binaries
+          for d in socialfetch-*-*-*; do
+            if [[ "$d" == *windows* ]]; then
+              zip -qr "../${d}.zip" "$d"
+            else
+              tar -czf "../${d}.tar.gz" "$d"
+            fi
+          done
+          ls -lh ../*.tar.gz ../*.zip
+
+      - name: Package Claude Desktop Extension (.mcpb)
+        run: make claude-extension-package
+
+      - name: Package skill zip (darwin-arm64)
+        # `make skill-package` builds the host platform's binary,
+        # which on a linux runner would ship a Linux binary inside
+        # a zip the typical user (Mac) can't run. Package manually
+        # using the cross-built darwin-arm64 binary instead. Other
+        # platforms get the bare-binary archives — skill bundling
+        # other arches is a follow-up if there's demand.
+        run: |
+          set -euo pipefail
+          V="${{ steps.ver.outputs.value }}"
+          STAGE=$(mktemp -d)
+          mkdir -p "$STAGE/scripts"
+          cp skill/socialfetch/SKILL.md "$STAGE/SKILL.md"
+          cp "dist/binaries/socialfetch-${V}-darwin-arm64/socialfetch" "$STAGE/scripts/socialfetch"
+          (cd "$STAGE" && zip -qr "$GITHUB_WORKSPACE/dist/socialfetch-skill-${V}.zip" .)
+          ls -lh "dist/socialfetch-skill-${V}.zip"
+
+      - name: Package Claude Code plugin zip
+        run: make plugin-package
+
+      - name: Package Chrome browser-bridge zip
+        run: make bridge-package
+
+      - name: List release artifacts
+        run: ls -lh dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Release notes default to the commits between the previous
+          # tag and this one, generated by GitHub. Override here if
+          # you want curated notes — but the auto-generated list is
+          # fine until releases get gnarly.
+          generate_release_notes: true
+          # Mark prerelease for any tag containing `-` (e.g.
+          # v0.9.0-rc1, v0.9.0-beta.1). Final tags like v0.9.0 are
+          # full releases.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          # Glob across the dist root catches every artifact the
+          # Makefile and bare-binary steps produced. Excludes the
+          # intermediate dist/binaries/ tree so we ship archives,
+          # not the staging dirs themselves.
+          files: |
+            dist/socialfetch-*.mcpb
+            dist/socialfetch-*.zip
+            dist/socialfetch-*.tar.gz
