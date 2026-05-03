@@ -7,6 +7,32 @@ import (
 	"github.com/jedi4ever/social-skills/internal/util/htmlmeta"
 )
 
+// TestMediumImageHost confirms the host matcher accepts Medium's CDN
+// shapes (cdn-images-1, cdn-images-2, miro) and rejects external
+// hosts. Catches drift if Medium adds a new CDN host or renames an
+// existing one — that'd silently drop body images otherwise.
+func TestMediumImageHost(t *testing.T) {
+	cases := []struct {
+		src  string
+		want bool
+	}{
+		{"https://cdn-images-1.medium.com/max/1024/figure.png", true},
+		{"https://cdn-images-2.medium.com/v2/resize:fit:1200/0*xyz.png", true},
+		{"https://miro.medium.com/v2/resize:fit:1400/1*abc.png", true},
+		{"https://cdn-images-12.medium.com/max/2400/img.png", true},
+		{"https://imgur.com/external.jpg", false},
+		{"https://i.imgur.com/external.jpg", false},
+		{"https://medium.com/static/icon.svg", false}, // not a CDN host
+		{"data:image/svg+xml;base64,xxx", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := mediumImageHost(c.src); got != c.want {
+			t.Errorf("mediumImageHost(%q) = %v, want %v", c.src, got, c.want)
+		}
+	}
+}
+
 // Verifies the Medium extractor picks the host-specific .pw-post-body
 // container instead of falling back to the generic <article> body. If
 // Medium ever renames .pw-post-body again this test surfaces it

@@ -41,6 +41,11 @@ func (m *Extractor) Extract(rawURL string, page *htmlmeta.Page) (*core.Item, err
 	item := article.BaseFromPage(rawURL, page, "medium")
 	item.Content = article.RenderArticle(page, articleSelectors, item.Summary)
 
+	// Append body-embedded images. Medium serves figures off
+	// `cdn-images-1.medium.com` and `miro.medium.com`; the hero
+	// from BaseFromPage (og:image) is deduped automatically.
+	article.AppendBodyImages(item, page, articleSelectors, mediumImageHost)
+
 	// Medium-specific extras live on the byline / footer UI. All optional
 	// — missing values don't break the item.
 	if rt := page.Meta["twitter:data1"]; rt != "" {
@@ -59,6 +64,22 @@ func (m *Extractor) Extract(rawURL string, page *htmlmeta.Page) (*core.Item, err
 	}
 
 	return item, nil
+}
+
+// mediumImageHost is the article.HostMatcher for Medium body images.
+// Medium serves figures from a small set of CDN hosts:
+//
+//   - cdn-images-1.medium.com (legacy, still common)
+//   - miro.medium.com         (modern)
+//   - cdn-images-N.medium.com (rotating shards)
+//
+// External images embedded in posts (e.g. someone pastes an
+// imgur link) are skipped — we'd need an OCR/describe step to
+// know they're worth keeping anyway.
+func mediumImageHost(src string) bool {
+	low := strings.ToLower(src)
+	return strings.Contains(low, "cdn-images-") && strings.Contains(low, "medium.com") ||
+		strings.Contains(low, "miro.medium.com")
 }
 
 // stripTags is a tiny helper for inner HTML that may contain <span> or

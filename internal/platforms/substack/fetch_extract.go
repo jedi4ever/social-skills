@@ -39,6 +39,12 @@ func (s *Extractor) Extract(rawURL string, page *htmlmeta.Page) (*core.Item, err
 	item := article.BaseFromPage(rawURL, page, "substack")
 	item.Content = article.RenderArticle(page, articleSelectors, item.Summary)
 
+	// Append body-embedded images. Substack serves figures from
+	// substackcdn.com and the bucketeer-* / cloudfront-* CDN hosts
+	// it routes through. Hero from BaseFromPage (og:image) is
+	// deduped automatically.
+	article.AppendBodyImages(item, page, articleSelectors, substackImageHost)
+
 	// Substack-specific extras: subtitle, publication name, like &
 	// comment counts. All optional.
 	if n := htmlmeta.SelectFirst(page.Doc, "h3.subtitle-text"); n != nil {
@@ -57,4 +63,23 @@ func (s *Extractor) Extract(rawURL string, page *htmlmeta.Page) (*core.Item, err
 	}
 
 	return item, nil
+}
+
+// substackImageHost is the article.HostMatcher for Substack body
+// images. Substack rotates between several CDN hosts:
+//
+//   - substackcdn.com
+//   - substack-post-media.s3.amazonaws.com
+//   - bucketeer-*.s3.amazonaws.com (newer)
+//   - *.cloudfront.net (rare; some custom-domain newsletters)
+//
+// External images embedded in posts (Twitter/X media, imgur, etc.)
+// are skipped — they're often the most informative but live outside
+// our CDN matcher. Could be relaxed once we have an external-image
+// allowlist, but for now we err toward predictable behaviour.
+func substackImageHost(src string) bool {
+	low := strings.ToLower(src)
+	return strings.Contains(low, "substackcdn.com") ||
+		strings.Contains(low, "substack-post-media") ||
+		(strings.Contains(low, "bucketeer-") && strings.Contains(low, ".s3.amazonaws.com"))
 }

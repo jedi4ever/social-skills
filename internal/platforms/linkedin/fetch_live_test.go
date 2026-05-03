@@ -44,6 +44,52 @@ func TestLiveLinkedInFetch(t *testing.T) {
 	t.Logf("title=%q author=%q content_chars=%d", item.Title, item.Author, len(item.Content))
 }
 
+// TestLiveLinkedInFetchMedia hits a known post (Cole Medin
+// announcing Archon's 20k stars — the URL the user reported in the
+// session that motivated this test) and verifies that media
+// extraction produces at least one image. Stable enough as a fixture
+// because public posts on LinkedIn don't get retroactively edited
+// often, and even if Archon's 20k post drops we'd still see SOME
+// media on a typical /posts/ URL — the assertion is "post media
+// extracted, not zero" rather than "exactly this URL".
+//
+// Run with: go test -tags=live -run TestLiveLinkedInFetchMedia
+//
+//	./internal/platforms/linkedin/...
+func TestLiveLinkedInFetchMedia(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	const postURL = "https://www.linkedin.com/posts/cole-medin-727752184_archon-just-crossed-20000-github-stars-share-7454993154392502272-RSYe/"
+	item, err := New().Fetch(ctx, postURL, core.DefaultOptions())
+	if err != nil {
+		if isBridgeEnvErr(err) {
+			t.Skipf("bridge not available: %v", err)
+		}
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(item.Media) == 0 {
+		t.Errorf("expected at least one media item, got none")
+	}
+	for i, m := range item.Media {
+		// Every kept media must be on a LinkedIn-CDN host. If we
+		// surface random external URLs, the chrome filter has
+		// drifted and needs updating.
+		if !strings.Contains(m.URL, "media.licdn.com") &&
+			!strings.Contains(m.URL, "media-exp") {
+			t.Errorf("media[%d] URL not on licdn CDN: %s", i, m.URL)
+		}
+		// Type should be one of the known shapes.
+		switch m.Type {
+		case "image", "video-poster":
+		default:
+			t.Errorf("media[%d] unexpected Type=%q", i, m.Type)
+		}
+	}
+	t.Logf("extracted %d media items (first: %s, type=%s)",
+		len(item.Media), item.Media[0].URL, item.Media[0].Type)
+}
+
 // isBridgeEnvErr reports whether err looks like a missing-bridge or
 // missing-extension condition — both of which are environment problems
 // rather than code regressions, so we should skip rather than fail.

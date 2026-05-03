@@ -26,3 +26,32 @@ func TestLiveArticleExampleDotCom(t *testing.T) {
 		t.Errorf("unexpected title: %q", item.Title)
 	}
 }
+
+// TestLiveArticleFetchMediaImageRich hits a known image-rich blog
+// (the user-reported milvus.io article that motivated the redirect-
+// loop fix in v0.10.13 — also has multiple inline diagrams) and
+// asserts body-image extraction surfaces at least one image. Stable
+// enough as a fixture: blogs of this shape rarely strip imagery.
+//
+// Note: this URL goes through the Jina-Reader fallback path because
+// milvus.io 404s our HTTP UA — Jina returns clean markdown which
+// won't have the original <img> tags, so this test is really
+// asserting "at least the og:image hero gets through" via
+// BaseFromPage. Use a different fixture if Jina markdown becomes
+// the test target later.
+func TestLiveArticleFetchMediaImageRich(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	const postURL = "https://newsletter.armand.so/p/the-five-pillars-of-context-engineering"
+	item, err := New().Fetch(ctx, postURL, core.DefaultOptions())
+	if err != nil {
+		t.Skipf("article live fetch skipped: %v", err)
+	}
+	if len(item.Media) == 0 {
+		t.Errorf("expected at least the og:image hero in Media, got 0")
+	}
+	for i, m := range item.Media {
+		t.Logf("media[%d] type=%s url=%s alt=%q", i, m.Type, m.URL, m.Alt)
+	}
+}

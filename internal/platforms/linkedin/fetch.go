@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/net/html"
+
 	"github.com/jedi4ever/social-skills/internal/bridge"
 	"github.com/jedi4ever/social-skills/internal/core"
 	"github.com/jedi4ever/social-skills/internal/util/htmlmd"
@@ -69,6 +71,17 @@ func (f *Fetcher) Fetch(ctx context.Context, raw string, opts core.Options) (*co
 	cleanedHTML, comments := cleanHTML(htmlStr)
 	body2 := trimBoilerplate(htmlmd.Convert(cleanedHTML))
 
+	// Media extraction runs against the RAW HTML (not cleanedHTML),
+	// because cleanHTML strips images aggressively to keep the body
+	// text-focused. extractMedia has its own chrome filter so the
+	// signal-to-noise stays high — only post-attached media (photos,
+	// video posters) end up on Item.Media, not avatars / logos /
+	// reaction badges.
+	var media []core.Media
+	if doc, perr := html.Parse(strings.NewReader(htmlStr)); perr == nil {
+		media = extractMedia(doc)
+	}
+
 	author, authorURL := extractAuthor(htmlStr)
 	canonical := canonicalID(finalURL)
 
@@ -82,6 +95,7 @@ func (f *Fetcher) Fetch(ctx context.Context, raw string, opts core.Options) (*co
 		AuthorURL:   authorURL,
 		Content:     body2,
 		Comments:    comments,
+		Media:       media,
 		FetchedAt:   time.Now().UTC(),
 		Extra: map[string]any{
 			"via":           "bridge",

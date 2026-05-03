@@ -7,6 +7,30 @@ import (
 	"github.com/jedi4ever/social-skills/internal/util/htmlmeta"
 )
 
+// TestSubstackImageHost confirms the host matcher accepts Substack's
+// CDN shapes — substackcdn.com (primary), substack-post-media S3
+// bucket (legacy), and bucketeer-*.s3.amazonaws.com (newer). External
+// hosts are rejected so we don't pull in unrelated imagery.
+func TestSubstackImageHost(t *testing.T) {
+	cases := []struct {
+		src  string
+		want bool
+	}{
+		{"https://substackcdn.com/image/fetch/...img.png", true},
+		{"https://substack-post-media.s3.amazonaws.com/public/images/abc.png", true},
+		{"https://bucketeer-e05bbc05-baae-4d4b-9b6d-cd0f0c4d0c8b.s3.amazonaws.com/public/images/x.png", true},
+		{"https://imgur.com/external.jpg", false},
+		{"https://substack.com/static/icon.svg", false}, // not a CDN host
+		{"data:image/png;base64,xxx", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := substackImageHost(c.src); got != c.want {
+			t.Errorf("substackImageHost(%q) = %v, want %v", c.src, got, c.want)
+		}
+	}
+}
+
 // substackPage exercises the Substack-specific selectors: .body.markup
 // for the article body, h3.subtitle-text for the subtitle. Nav/footer
 // cruft must NOT leak into the markdown output.

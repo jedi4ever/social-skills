@@ -154,3 +154,62 @@ common case; native fetcher has clear scope but no urgent demand
 yet.
 
 ---
+
+## Body-image extraction for Medium / Substack + downloadable media
+
+**Done in v0.10.14:** body-image extraction across LinkedIn,
+Medium, Substack, AND the generic article fetcher.
+- LinkedIn: per-platform DOM walk in
+  `internal/platforms/linkedin/fetch_extract_media.go`. Avatars,
+  reaction badges, comment-thread images dropped; post photos +
+  video posters kept.
+- Medium / Substack / generic article: shared helper at
+  `internal/platforms/article/body_images.go` with per-platform
+  CDN host matchers (`mediumImageHost`, `substackImageHost`,
+  `anyHTTPHost` for the generic case). Hero from BaseFromPage is
+  deduped automatically.
+- Configurable size threshold via `SOCIAL_FETCH_MIN_IMAGE_SIZE`
+  (default 64px). Operators bump it higher to drop thumbnails.
+- ~30 unit tests across the four platforms; live tests for each
+  verify `len(Media) > 0` against a stable URL.
+
+**Then: media downloading.** When `SOCIAL_FETCH_DOWNLOAD_MEDIA=1`,
+fetch each `Item.Media[].URL` to a temp dir / ledger media
+subdir; populate `Media.LocalPath`. Caps via
+`SOCIAL_FETCH_MEDIA_MAX_BYTES`. LinkedIn images at
+`media.licdn.com` are CDN-served and downloadable without auth
+(only the page HTML needs the bridge).
+
+**Then: OCR / vision describe.** Patai (~/dev/knowledge/patai/
+providers/media/) has reference implementations for three
+strategies:
+- `claude.py` — Claude vision describes the image
+- `florence.py` — Microsoft Florence-2 (local model)
+- `ocr.py` — tesseract for pure text extraction
+Their LinkedIn extractor inlines OCR output into Content as a
+`[Image text]\n...` block. We could surface the same via either
+inline (cheap, OCR-on-fetch) or on-demand (expose
+`Media.Describe()` that the agent calls when it cares).
+
+For social-skills the right choice is probably **on-demand via a
+new tool** — `social_fetch_describe_image` taking a Media URL or
+LocalPath and routing through whichever vision/OCR provider is
+configured (`MEDIA_DESCRIBER=claude|tesseract|jina-vision`).
+Avoids the OCR-on-every-fetch cost and lets agents cherry-pick
+which images deserve attention. The agent's own vision
+(Claude Code / Claude Desktop) is already a primitive for the
+"can it just look at the image" case.
+
+**Sketch of the cumulative API surface when fully built:**
+```go
+type Media struct {
+    URL       string
+    Type      string  // "image" / "video" / "video-poster" / "gif"
+    Alt       string
+    LocalPath string  // populated when DOWNLOAD_MEDIA=1
+    Bytes     int     // size hint (helps agent pick small thumbs first)
+    Describe  string  // populated by social_fetch_describe_image when called
+}
+```
+
+---

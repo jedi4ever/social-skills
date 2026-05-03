@@ -38,3 +38,24 @@ func TestLiveSubstackFetch(t *testing.T) {
 	}
 	t.Logf("title=%q content_chars=%d via=%v", item.Title, len(item.Content), item.Extra["via"])
 }
+
+// TestLiveSubstackFetchMedia confirms body-image extraction populates
+// item.Media against a real Substack post. Lenny's Newsletter
+// historically ships an og:image cover; the assertion is
+// `len(Media) > 0` so this stays robust to editorial changes.
+func TestLiveSubstackFetchMedia(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	const postURL = "https://www.lennysnewsletter.com/"
+	item, err := New().Fetch(ctx, postURL, core.DefaultOptions())
+	if err != nil {
+		t.Skipf("substack live fetch skipped: %v", err)
+	}
+	if len(item.Media) == 0 {
+		t.Errorf("expected at least the og:image hero in Media, got 0")
+	}
+	for i, m := range item.Media {
+		t.Logf("media[%d] type=%s url=%s alt=%q", i, m.Type, m.URL, m.Alt)
+	}
+}

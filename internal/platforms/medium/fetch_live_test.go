@@ -37,3 +37,25 @@ func TestLiveMediumFetch(t *testing.T) {
 	}
 	t.Logf("title=%q content_chars=%d via=%v", item.Title, len(item.Content), item.Extra["via"])
 }
+
+// TestLiveMediumFetchMedia confirms body-image extraction populates
+// item.Media against a real Medium post. Most Medium articles ship
+// with at least the og:image hero plus 1-2 inline figures; the
+// assertion is `len(Media) > 0` rather than a fixed count since
+// editors can change image content post-publish without notice.
+func TestLiveMediumFetchMedia(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	const postURL = "https://medium.com/@patrickdebois/the-three-pillars-of-the-context-engineering-lifecycle-cdlc-43f1c0066b4f"
+	item, err := New().Fetch(ctx, postURL, core.DefaultOptions())
+	if err != nil {
+		t.Skipf("medium live fetch skipped: %v", err)
+	}
+	if len(item.Media) == 0 {
+		t.Errorf("expected at least the og:image hero in Media, got 0")
+	}
+	for i, m := range item.Media {
+		t.Logf("media[%d] type=%s url=%s alt=%q", i, m.Type, m.URL, m.Alt)
+	}
+}
