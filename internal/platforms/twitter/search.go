@@ -99,6 +99,9 @@ type response struct {
 			Username string `json:"username"`
 		} `json:"users"`
 	} `json:"includes"`
+	Meta struct {
+		NextToken string `json:"next_token"`
+	} `json:"meta"`
 	Errors []struct {
 		Message string `json:"message"`
 		Title   string `json:"title"`
@@ -106,6 +109,18 @@ type response struct {
 }
 
 func (p *SearchProvider) Search(ctx context.Context, query string, opts core.SearchOptions) ([]core.SearchResult, error) {
+	page, err := p.SearchPaged(ctx, query, opts)
+	if err != nil {
+		return nil, err
+	}
+	return page.Results, nil
+}
+
+// SearchPaged exposes X v2 recent-search's `next_token` cursor.
+// Each response carries `meta.next_token` when more results are
+// available within the 7-day window; pass it back as opts.Cursor on
+// the next call to continue. Empty NextCursor means no more pages.
+func (p *SearchProvider) SearchPaged(ctx context.Context, query string, opts core.SearchOptions) (*core.SearchPage, error) {
 	creds := p.Creds
 	if creds.Key == "" || creds.Secret == "" {
 		c, ok := FromEnv()
@@ -152,6 +167,9 @@ func (p *SearchProvider) Search(ctx context.Context, query string, opts core.Sea
 		"expansions":   {"author_id"},
 		"tweet.fields": {"created_at,public_metrics,lang,note_tweet"},
 		"user.fields":  {"username,name"},
+	}
+	if opts.Cursor != "" {
+		q.Set("next_token", opts.Cursor)
 	}
 	if opts.After != nil {
 		// Allow a small slack: the After time is computed by the CLI
@@ -235,7 +253,7 @@ func (p *SearchProvider) Search(ctx context.Context, query string, opts core.Sea
 			Published: published,
 		})
 	}
-	return out, nil
+	return &core.SearchPage{Results: out, NextCursor: body.Meta.NextToken}, nil
 }
 
 // decodeXError extracts a useful message from an X API error response.

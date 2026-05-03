@@ -78,6 +78,83 @@ func TestSearchHappyPath(t *testing.T) {
 	}
 }
 
+// TestSearchPagedCursor confirms YouTube's pageToken cursor flows
+// both directions: opts.Cursor → upstream `pageToken=…` query
+// param, and response's `nextPageToken` → SearchPage.NextCursor.
+func TestSearchPagedCursor(t *testing.T) {
+	var seenToken string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenToken = r.URL.Query().Get("pageToken")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"nextPageToken": "page2-token-xyz",
+			"items": []map[string]any{
+				{
+					"id":      map[string]any{"videoId": "vid001"},
+					"snippet": map[string]any{"title": "First"},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	p := NewSearchProvider()
+	p.BaseURL = srv.URL
+	p.Key = "K"
+
+	// First call — no cursor in input.
+	page, err := p.SearchPaged(context.Background(), "x", core.SearchOptions{Max: 5})
+	if err != nil {
+		t.Fatalf("first SearchPaged: %v", err)
+	}
+	if seenToken != "" {
+		t.Errorf("first call should not send pageToken, got %q", seenToken)
+	}
+	if page.NextCursor != "page2-token-xyz" {
+		t.Errorf("NextCursor = %q, want page2-token-xyz", page.NextCursor)
+	}
+
+	// Second call — pass the cursor back.
+	_, err = p.SearchPaged(context.Background(), "x", core.SearchOptions{Max: 5, Cursor: page.NextCursor})
+	if err != nil {
+		t.Fatalf("second SearchPaged: %v", err)
+	}
+	if seenToken != "page2-token-xyz" {
+		t.Errorf("second call should forward cursor as pageToken, got %q", seenToken)
+	}
+}
+
+// TestSearchPagedNoMore — when upstream returns no nextPageToken,
+// SearchPage.NextCursor stays empty so the caller knows to stop.
+func TestSearchPagedNoMore(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			// No nextPageToken field at all.
+			"items": []map[string]any{
+				{
+					"id":      map[string]any{"videoId": "v1"},
+					"snippet": map[string]any{"title": "Last"},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	p := NewSearchProvider()
+	p.BaseURL = srv.URL
+	p.Key = "K"
+
+	page, err := p.SearchPaged(context.Background(), "x", core.SearchOptions{Max: 5})
+	if err != nil {
+		t.Fatalf("SearchPaged: %v", err)
+	}
+	if page.NextCursor != "" {
+		t.Errorf("NextCursor should be empty when upstream omits it, got %q", page.NextCursor)
+	}
+	if len(page.Results) != 1 {
+		t.Errorf("want 1 result, got %d", len(page.Results))
+	}
+}
+
 // When After is set, order is forced to "date" and publishedAfter is
 // passed as RFC3339.
 func TestSearchAfterForcesDateOrder(t *testing.T) {

@@ -39,9 +39,11 @@ func NewSearchProvider() *SearchProvider {
 
 func (SearchProvider) Name() string { return "youtube" }
 
-// apiResp models the slice of search.list we read.
+// apiResp models the slice of search.list we read. NextPageToken is
+// the cursor we surface to the caller for paging through results.
 type apiResp struct {
-	Items []struct {
+	NextPageToken string `json:"nextPageToken"`
+	Items         []struct {
 		ID struct {
 			VideoID string `json:"videoId"`
 		} `json:"id"`
@@ -55,6 +57,19 @@ type apiResp struct {
 }
 
 func (p *SearchProvider) Search(ctx context.Context, query string, opts core.SearchOptions) ([]core.SearchResult, error) {
+	page, err := p.SearchPaged(ctx, query, opts)
+	if err != nil {
+		return nil, err
+	}
+	return page.Results, nil
+}
+
+// SearchPaged exposes YouTube Data API v3's `pageToken` cursor.
+// Each search.list response includes `nextPageToken` when more
+// results exist; pass it back as opts.Cursor on the next call. Each
+// page costs 100 quota units (vs 1 for metadata) — agents that page
+// through many results burn through the daily 10k quota fast.
+func (p *SearchProvider) SearchPaged(ctx context.Context, query string, opts core.SearchOptions) (*core.SearchPage, error) {
 	key := p.Key
 	if key == "" {
 		key = os.Getenv("YOUTUBE_API_KEY")
@@ -90,6 +105,9 @@ func (p *SearchProvider) Search(ctx context.Context, query string, opts core.Sea
 		"maxResults": {strconv.Itoa(maxN)},
 		"order":      {order},
 		"key":        {key},
+	}
+	if opts.Cursor != "" {
+		q.Set("pageToken", opts.Cursor)
 	}
 	if opts.After != nil {
 		q.Set("publishedAfter", opts.After.UTC().Format(time.RFC3339))
@@ -139,7 +157,7 @@ func (p *SearchProvider) Search(ctx context.Context, query string, opts core.Sea
 		}
 		out = append(out, r)
 	}
-	return out, nil
+	return &core.SearchPage{Results: out, NextCursor: data.NextPageToken}, nil
 }
 
 // composeSnippet prefixes the channel name to the description so the

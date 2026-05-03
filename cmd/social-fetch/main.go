@@ -61,7 +61,7 @@ import (
 
 // Version is the user-visible social-fetch version. Bump this on every
 // user-visible release. See CLAUDE.md "Versioning" for the rule.
-const Version = "0.10.9"
+const Version = "0.10.10"
 
 // defaultAskChain is the fallback order used by `-p auto`. Cheap +
 // reliable first (perplexity has the highest hit rate on grounded
@@ -557,6 +557,7 @@ type searchFlags struct {
 	provider       string
 	max            int
 	start          int
+	cursor         string
 	format         string
 	output         string
 	logFile        string
@@ -599,10 +600,10 @@ func parseSearchFlags(args []string) (*searchFlags, error) {
 			}
 			f.max = n
 		case "--start":
-			// 0-based result offset for paging through long result
-			// sets without forcing the provider to dump the whole
-			// list in one shot. Honored by SerpAPI; ignored by
-			// providers without native pagination.
+			// 0-based result offset for paging through offset-
+			// paginated providers (serpapi, hackernews, arxiv,
+			// brave, google CSE). Ignored by cursor-paginated
+			// providers — those use --cursor instead.
 			i++
 			if i >= len(args) {
 				return nil, fmt.Errorf("--start needs a value")
@@ -612,6 +613,16 @@ func parseSearchFlags(args []string) (*searchFlags, error) {
 				return nil, err
 			}
 			f.start = n
+		case "--cursor":
+			// Opaque page token for cursor-paginated providers
+			// (reddit, x, youtube, bluesky). On the first call
+			// leave it unset; the previous call's `next_cursor`
+			// is what to pass back here to continue paging.
+			i++
+			if i >= len(args) {
+				return nil, fmt.Errorf("--cursor needs a value")
+			}
+			f.cursor = args[i]
 		case "-f", "--format":
 			i++
 			if i >= len(args) {
@@ -753,19 +764,40 @@ func runSearch(args []string) error {
 	defer cancel()
 
 	audit.Logf("search %q via %s (max=%d, start=%d)", flags.query, provider.Name(), flags.max, flags.start)
-	results, err := provider.Search(ctx, flags.query, core.SearchOptions{
+	searchOpts := core.SearchOptions{
 		Max:            flags.max,
 		Start:          flags.start,
+		Cursor:         flags.cursor,
 		Before:         flags.before,
 		After:          flags.after,
 		IncludeDomains: flags.includeDomains,
 		ExcludeDomains: flags.excludeDomains,
-	})
-	if err != nil {
-		audit.Logf("search FAILED: %v", err)
-		return err
 	}
-	audit.Logf("search returned %d results", len(results))
+	var (
+		results    []core.SearchResult
+		nextCursor string
+	)
+	// Cursor-paginated providers (reddit, x, youtube, bluesky)
+	// implement the optional CursorPaginator interface; use it
+	// when available so we can surface next_cursor for the agent
+	// to pass back on the next call.
+	if cp, ok := provider.(core.CursorPaginator); ok {
+		page, err := cp.SearchPaged(ctx, flags.query, searchOpts)
+		if err != nil {
+			audit.Logf("search FAILED: %v", err)
+			return err
+		}
+		results = page.Results
+		nextCursor = page.NextCursor
+	} else {
+		var err error
+		results, err = provider.Search(ctx, flags.query, searchOpts)
+		if err != nil {
+			audit.Logf("search FAILED: %v", err)
+			return err
+		}
+	}
+	audit.Logf("search returned %d results (next_cursor=%q)", len(results), nextCursor)
 
 	out, closeOut, err := openOutput(flags.output)
 	if err != nil {
@@ -773,7 +805,7 @@ func runSearch(args []string) error {
 	}
 	defer closeOut()
 
-	return renderSearchResults(out, results, format, flags.query, provider.Name())
+	return renderSearchResults(out, results, format, flags.query, provider.Name(), nextCursor)
 }
 
 // runAsk dispatches a question to one of the answer-engine providers
@@ -1017,7 +1049,7 @@ Output (markdown):
 `)
 }
 
-func renderSearchResults(w io.Writer, results []core.SearchResult, format render.Format, query, providerName string) error {
+func renderSearchResults(w io.Writer, results []core.SearchResult, format render.Format, query, providerName, nextCursor string) error {
 	switch format {
 	case render.FormatJSON, render.FormatJSONL:
 		// Wrap in a small envelope so consumers know which provider ran.
@@ -1026,6 +1058,9 @@ func renderSearchResults(w io.Writer, results []core.SearchResult, format render
 			"query":      query,
 			"provider":   providerName,
 			"results":    results,
+		}
+		if nextCursor != "" {
+			env["next_cursor"] = nextCursor
 		}
 		return render.Item(w, asItem(env, results, query, providerName), format)
 	case render.FormatMarkdown:
@@ -1039,6 +1074,13 @@ func renderSearchResults(w io.Writer, results []core.SearchResult, format render
 			if r.Snippet != "" {
 				fmt.Fprintf(w, "   %s\n\n", r.Snippet)
 			}
+		}
+		// Surface the next-page cursor so the agent can continue
+		// paging by re-running with --cursor=<token>. Quiet when
+		// unset (offset-paginated providers / last page reached).
+		if nextCursor != "" {
+			fmt.Fprintf(w, "\n---\n\n*More results available — re-run with `--cursor %s` to fetch the next page.*\n",
+				nextCursor)
 		}
 		return nil
 	}

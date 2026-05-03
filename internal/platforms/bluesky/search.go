@@ -72,6 +72,18 @@ type apiResp struct {
 }
 
 func (p *SearchProvider) Search(ctx context.Context, query string, opts core.SearchOptions) ([]core.SearchResult, error) {
+	page, err := p.SearchPaged(ctx, query, opts)
+	if err != nil {
+		return nil, err
+	}
+	return page.Results, nil
+}
+
+// SearchPaged exposes Bluesky's native cursor pagination. The
+// AppView returns a `cursor` token alongside the posts; pass it
+// back as opts.Cursor on the next call to continue. Empty NextCursor
+// in the response means no more results.
+func (p *SearchProvider) SearchPaged(ctx context.Context, query string, opts core.SearchOptions) (*core.SearchPage, error) {
 	jwt, err := p.session(ctx)
 	if err != nil {
 		return nil, err
@@ -89,6 +101,9 @@ func (p *SearchProvider) Search(ctx context.Context, query string, opts core.Sea
 	q := url.Values{
 		"q":     {query},
 		"limit": {strconv.Itoa(maxN)},
+	}
+	if opts.Cursor != "" {
+		q.Set("cursor", opts.Cursor)
 	}
 	// Native date filter: `since` (RFC3339) and `until`. Honor both.
 	if opts.After != nil {
@@ -148,7 +163,7 @@ func (p *SearchProvider) Search(ctx context.Context, query string, opts core.Sea
 		}
 		out = append(out, r)
 	}
-	return out, nil
+	return &core.SearchPage{Results: out, NextCursor: data.Cursor}, nil
 }
 
 // atURIToWebURL converts an at:// URI plus the post author's handle

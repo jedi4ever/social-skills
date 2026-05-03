@@ -33,6 +33,13 @@ biases anonymous results toward popular subs and downranks niche ones.
 For research-grade search across subreddits, `-p tavily` or
 `-p serpapi` with a `site:reddit.com` filter often returns better hits.
 
+## Pagination — cursor-based via `after`
+
+Reddit returns up to 100 hits per call. The response's `data.after`
+is the cursor token for the next page (Reddit fullname like `t3_<id>`).
+Pass it back as `--cursor <token>` (CLI) or `cursor: "<token>"` (MCP)
+to fetch the next page. Empty `next_cursor` means no more pages.
+
 ## Comments can be huge
 
 A popular thread might have 5,000+ comments. `--no-comments` skips

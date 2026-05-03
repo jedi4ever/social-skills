@@ -31,11 +31,51 @@ type SearchOptions struct {
 	ExcludeDomains []string   // denylist
 
 	// Start is the pagination offset (0-based result index, not page
-	// number). Providers that support paging respect this; ones that
-	// don't ignore it. SerpAPI / Brave / DuckDuckGo all support
-	// pagination natively. Use it to get results 11-20, 21-30, etc.
-	// without forcing the provider to return everything in one shot.
+	// number). Providers that support offset paging respect this;
+	// ones that don't ignore it. SerpAPI / HackerNews / arXiv /
+	// Brave / Google CSE all support offset pagination natively.
 	Start int
+
+	// Cursor is the opaque page token for cursor-paginated
+	// providers (Reddit, X, YouTube, Bluesky). On the first call
+	// leave it empty; the provider's SearchPaged returns a
+	// next_cursor in the result envelope when more results exist.
+	// Pass that token back as Cursor on the next call to continue.
+	//
+	// Cursor and Start are independent — providers use one or the
+	// other, never both. Calling a cursor-only provider with Start
+	// set ignores Start; calling an offset-only provider with
+	// Cursor set ignores Cursor.
+	Cursor string
+}
+
+// SearchPage is the cursor-aware return shape for providers that
+// implement CursorPaginator. Callers that don't care about cursors
+// can keep using SearchProvider.Search directly — the simpler
+// []SearchResult shape stays the canonical interface. Cursor-
+// based providers OPT IN by implementing both Search() (which calls
+// SearchPaged internally and discards the cursor) and SearchPaged()
+// (which surfaces it).
+type SearchPage struct {
+	Results    []SearchResult `json:"results"`
+	NextCursor string         `json:"next_cursor,omitempty"`
+}
+
+// CursorPaginator is implemented by providers whose APIs paginate
+// via opaque tokens (Reddit `after=`, X `next_token`, YouTube
+// `pageToken`, Bluesky `cursor`). Offset-paginated providers
+// (SerpAPI, HackerNews, arXiv, Brave, Google CSE) don't need this —
+// they take opts.Start instead and never produce a cursor.
+//
+// Callers detect cursor support with a type assertion on
+// SearchProvider:
+//
+//	if cp, ok := p.(core.CursorPaginator); ok {
+//	    page, err := cp.SearchPaged(ctx, query, opts)
+//	    // page.NextCursor is populated when more pages exist
+//	}
+type CursorPaginator interface {
+	SearchPaged(ctx context.Context, query string, opts SearchOptions) (*SearchPage, error)
 }
 
 // DefaultOptions returns options with the provider's own defaults.

@@ -88,6 +88,60 @@ func TestSearch(t *testing.T) {
 	}
 }
 
+// TestSearchPagedCursor confirms X v2's `next_token` cursor flows
+// both directions: opts.Cursor → upstream `next_token=…` query
+// param, and response's `meta.next_token` → SearchPage.NextCursor.
+func TestSearchPagedCursor(t *testing.T) {
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"token_type":"bearer","access_token":"BEARER"}`))
+	}))
+	defer tokenSrv.Close()
+
+	var seenNextToken string
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenNextToken = r.URL.Query().Get("next_token")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+            "data": [
+                {"id":"100","text":"hi","author_id":"u1","created_at":"2026-04-01T12:00:00Z","public_metrics":{"like_count":1,"retweet_count":0,"reply_count":0}}
+            ],
+            "includes": {"users":[{"id":"u1","name":"Alice","username":"alice"}]},
+            "meta": {"next_token": "page2-tok"}
+        }`))
+	}))
+	defer apiSrv.Close()
+
+	prev := TokenURL
+	TokenURL = tokenSrv.URL
+	defer func() { TokenURL = prev }()
+	ResetCache()
+
+	p := NewSearchProvider()
+	p.BaseURL = apiSrv.URL
+	p.Creds = Credentials{Key: "k", Secret: "s"}
+
+	// First call — no cursor input.
+	page, err := p.SearchPaged(context.Background(), "x", core.SearchOptions{Max: 10})
+	if err != nil {
+		t.Fatalf("first SearchPaged: %v", err)
+	}
+	if seenNextToken != "" {
+		t.Errorf("first call should not send next_token, got %q", seenNextToken)
+	}
+	if page.NextCursor != "page2-tok" {
+		t.Errorf("NextCursor = %q, want page2-tok", page.NextCursor)
+	}
+
+	// Second call — pass the cursor back.
+	_, err = p.SearchPaged(context.Background(), "x", core.SearchOptions{Max: 10, Cursor: page.NextCursor})
+	if err != nil {
+		t.Fatalf("second SearchPaged: %v", err)
+	}
+	if seenNextToken != "page2-tok" {
+		t.Errorf("second call should forward cursor, got %q", seenNextToken)
+	}
+}
+
 // X v2 recent-search rejects start_time older than 7 days. Catch this
 // at the client so the user gets a clear message instead of HTTP 400.
 func TestSearchRejectsAfterBeyondWindow(t *testing.T) {

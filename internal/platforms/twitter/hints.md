@@ -46,3 +46,13 @@ X v2's free tier is generous about *which* endpoints you can call but
 miserly about *how often*. Recent search caps at ~180 requests / 15
 minutes per app. Bulk timeline fetches across many users will trip
 the limiter quickly — back off when you see `HTTP 429`.
+
+## Pagination — cursor-based via `next_token`
+
+Recent-search returns up to 100 hits per call. For more, X uses
+opaque cursor tokens: each response carries `meta.next_token` when
+more results exist within the 7-day window. Pass it back as
+`--cursor <token>` (CLI) or `cursor: "<token>"` (MCP `social_fetch_search`)
+to fetch the next page. Empty `next_cursor` in the response means
+no more pages. Don't combine `--start` and `--cursor` — X is cursor-
+only.

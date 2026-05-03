@@ -51,9 +51,12 @@ func NewSearchProvider() *SearchProvider {
 func (SearchProvider) Name() string { return "reddit" }
 
 // listing mirrors Reddit's pagination envelope. We decode only the
-// fields we surface — extras are ignored.
+// fields we surface — extras are ignored. `After` is the next-page
+// cursor token Reddit returns; pass it back as `after=<token>` on
+// the next request to continue paging.
 type searchListing struct {
 	Data struct {
+		After    string `json:"after"`
 		Children []struct {
 			Data struct {
 				Title       string  `json:"title"`
@@ -72,6 +75,19 @@ type searchListing struct {
 }
 
 func (p *SearchProvider) Search(ctx context.Context, query string, opts core.SearchOptions) ([]core.SearchResult, error) {
+	page, err := p.SearchPaged(ctx, query, opts)
+	if err != nil {
+		return nil, err
+	}
+	return page.Results, nil
+}
+
+// SearchPaged is the cursor-aware variant. Reddit paginates via
+// `after=<fullname>` where the token is the fullname (t3_<id>) of
+// the last result on the previous page. We surface that token as
+// SearchPage.NextCursor so the caller can pass it back as
+// opts.Cursor on the next call.
+func (p *SearchProvider) SearchPaged(ctx context.Context, query string, opts core.SearchOptions) (*core.SearchPage, error) {
 	max := opts.Max
 	if max <= 0 {
 		max = 10
@@ -88,6 +104,9 @@ func (p *SearchProvider) Search(ctx context.Context, query string, opts core.Sea
 	}
 	if t := redditTimeBucket(opts.After); t != "" {
 		values.Set("t", t)
+	}
+	if opts.Cursor != "" {
+		values.Set("after", opts.Cursor)
 	}
 
 	endpoint := p.BaseURL + "/search.json"
@@ -148,7 +167,7 @@ func (p *SearchProvider) Search(ctx context.Context, query string, opts core.Sea
 			Published: published,
 		})
 	}
-	return results, nil
+	return &core.SearchPage{Results: results, NextCursor: resp.Data.After}, nil
 }
 
 // applyOperators folds include/exclude domains and subreddit hints

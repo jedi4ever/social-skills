@@ -388,6 +388,7 @@ type searchArgs struct {
 	Provider string `json:"provider,omitempty"`
 	Max      int    `json:"max,omitempty"`
 	Start    int    `json:"start,omitempty"`
+	Cursor   string `json:"cursor,omitempty"`
 	After    string `json:"after,omitempty"`
 	Before   string `json:"before,omitempty"`
 	Last     string `json:"last,omitempty"`
@@ -400,7 +401,8 @@ func addSearchTool(s *server.MCPServer, cfg Config) {
 		mcp.WithString("query", mcp.Required(), mcp.Description("Search query")),
 		mcp.WithString("provider", mcp.Description("Provider name, \"auto\", or comma-separated chain (default: auto)")),
 		mcp.WithNumber("max", mcp.Description("Max results (default 10)")),
-		mcp.WithNumber("start", mcp.Description("Pagination offset (0-based result index). Honored by serpapi / serpapi-news; ignored by providers without native paging. Use to walk through results page-by-page: max=10 + start=0, then start=10, start=20, etc.")),
+		mcp.WithNumber("start", mcp.Description("Pagination offset (0-based result index). For OFFSET-paginated providers: serpapi, serpapi-news, hackernews, arxiv, brave, google. Use max=10 + start=0, then start=10, start=20, etc. to walk pages. Cursor-paginated providers (reddit, x, youtube, bluesky) ignore this — use `cursor` instead.")),
+		mcp.WithString("cursor", mcp.Description("Opaque page token for CURSOR-paginated providers: reddit, x, youtube, bluesky. Leave empty on the first call; the response's `next_cursor` field is what to pass back here to fetch the next page. Empty `next_cursor` in the response means no more results. Offset-paginated providers ignore this — use `start` instead.")),
 		mcp.WithString("after", mcp.Description("Only results after this date (yyyy-mm-dd or RFC3339)")),
 		mcp.WithString("before", mcp.Description("Only results before this date")),
 		mcp.WithString("last", mcp.Description("Sugar for `after`: \"7d\", \"24h\", \"1m\"")),
@@ -421,7 +423,7 @@ func addSearchTool(s *server.MCPServer, cfg Config) {
 			audit.Logf("search FAILED: %v", err)
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		opts := core.SearchOptions{Max: args.Max, Start: args.Start}
+		opts := core.SearchOptions{Max: args.Max, Start: args.Start, Cursor: args.Cursor}
 		if t, err := parseDate(args.After); err != nil {
 			return mcp.NewToolResultError("after: " + err.Error()), nil
 		} else if t != nil {
@@ -447,18 +449,43 @@ func addSearchTool(s *server.MCPServer, cfg Config) {
 				}
 			}
 		}
-		results, err := provider.Search(ctx, args.Query, opts)
-		if err != nil {
-			audit.Logf("search FAILED: %v", err)
-			return mcp.NewToolResultError(err.Error()), nil
+		// Cursor-paginated providers (reddit, x, youtube, bluesky)
+		// implement core.CursorPaginator so we can surface
+		// next_cursor in the envelope. Offset-paginated providers
+		// fall through to the simpler Search() path.
+		var (
+			results    []core.SearchResult
+			nextCursor string
+		)
+		if cp, ok := provider.(core.CursorPaginator); ok {
+			page, err := cp.SearchPaged(ctx, args.Query, opts)
+			if err != nil {
+				audit.Logf("search FAILED: %v", err)
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			results = page.Results
+			nextCursor = page.NextCursor
+		} else {
+			r, err := provider.Search(ctx, args.Query, opts)
+			if err != nil {
+				audit.Logf("search FAILED: %v", err)
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			results = r
 		}
-		audit.Logf("search returned %d results via %s", len(results), provider.Name())
-		return jsonResult(map[string]any{
+		audit.Logf("search returned %d results via %s (next_cursor=%q)",
+			len(results), provider.Name(), nextCursor)
+		envelope := map[string]any{
 			"query":    args.Query,
 			"provider": provider.Name(),
 			"count":    len(results),
 			"results":  results,
-		})
+		}
+		if nextCursor != "" {
+			envelope["next_cursor"] = nextCursor
+			envelope["pagination_hint"] = "More results available — call this tool again with `cursor: \"" + nextCursor + "\"` (everything else identical) to fetch the next page."
+		}
+		return jsonResult(envelope)
 	}))
 }
 
