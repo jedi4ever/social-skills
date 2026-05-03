@@ -79,10 +79,10 @@ func run(args []string) error {
 }
 
 // dataDir resolves the per-user data directory, honoring
-// $SOCIALFETCH_LEDGER_DIR (explicit override) and $XDG_DATA_HOME
+// $SOCIAL_LEDGER_DIR (explicit override) and $XDG_DATA_HOME
 // (XDG default). Falls back to ~/.local/share/social-ledger.
 func dataDir() (string, error) {
-	if d := os.Getenv("SOCIALFETCH_LEDGER_DIR"); d != "" {
+	if d := os.Getenv("SOCIAL_LEDGER_DIR"); d != "" {
 		return d, nil
 	}
 	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
@@ -99,7 +99,7 @@ func dataDir() (string, error) {
 // accepts it so users can point a single invocation at an alternate
 // ledger (test fixtures, scratch ledger, etc.).
 func addCommonFlags(fs *flag.FlagSet, dataDirOut *string) {
-	fs.StringVar(dataDirOut, "data-dir", "", "ledger data directory (default: $SOCIALFETCH_LEDGER_DIR or $XDG_DATA_HOME/social-ledger)")
+	fs.StringVar(dataDirOut, "data-dir", "", "ledger data directory (default: $SOCIAL_LEDGER_DIR or $XDG_DATA_HOME/social-ledger)")
 }
 
 // resolveDataDir picks the explicit --data-dir flag value when set,
@@ -144,7 +144,7 @@ COMMANDS
 DATA LOCATION
   Default: $XDG_DATA_HOME/social-ledger or ~/.local/share/social-ledger
   Override with --data-dir <path> on any subcommand, or
-  set $SOCIALFETCH_LEDGER_DIR.
+  set $SOCIAL_LEDGER_DIR.
 
 EXAMPLES
   social-fetch fetch https://news.ycombinator.com/item?id=1 -f jsonl \

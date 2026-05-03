@@ -307,7 +307,7 @@ func dispatch(ctx context.Context, a Angle, opts Options) AngleResult {
 		// Auto-ledger: pipe each angle's fetched item through too.
 		// Research is the highest-value ingest target — N angles
 		// per question, each potentially producing a citation an
-		// agent will revisit later. No-op when SOCIALFETCH_LEDGER
+		// agent will revisit later. No-op when SOCIAL_LEDGER
 		// is unset.
 		if item != nil {
 			ledger.Ingest(ctx, *item)

@@ -289,8 +289,8 @@ When the user asks a question that resembles "have we seen X
 before?" or "what did we learn about Y last week?" — the ledger is
 where to look first, before re-fetching.
 
-To explicitly disable: set `SOCIALFETCH_LEDGER=0` in the env. To
-override the storage location: `SOCIALFETCH_LEDGER_DIR=...`
+To explicitly disable: set `SOCIAL_LEDGER=0` in the env. To
+override the storage location: `SOCIAL_LEDGER_DIR=...`
 (default `~/.local/share/social-ledger`).
 
 ## When NOT to use this skill

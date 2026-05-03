@@ -213,7 +213,7 @@ func runTimeline(args []string) error {
 		return err
 	}
 	// Auto-ingest the timeline parent + each child post into the
-	// ledger when SOCIALFETCH_LEDGER=1. Children are individually
+	// ledger when SOCIAL_LEDGER=1. Children are individually
 	// addressable items (each has its own URL), so the ledger
 	// indexes them as separate entries — matches how a per-URL
 	// fetch of one of those posts would land.

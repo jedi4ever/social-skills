@@ -6,7 +6,7 @@
 //
 //	social-fetch fetch <url>     →  HTTP GET against an httptest server
 //	                            →  rendered output on stdout
-//	(when SOCIALFETCH_LEDGER=1)
+//	(when SOCIAL_LEDGER=1)
 //	                            →  subprocess to social-ledger
 //	                            →  SQLite + mirror tree on disk
 //
@@ -74,7 +74,7 @@ real-world API quota.</p></article>
 	}))
 }
 
-// TestFetchExplicitlyDisabled verifies SOCIALFETCH_LEDGER=0 wins
+// TestFetchExplicitlyDisabled verifies SOCIAL_LEDGER=0 wins
 // over a present binary — the explicit off-switch beats the
 // auto-detect default.
 func TestFetchExplicitlyDisabled(t *testing.T) {
@@ -85,9 +85,9 @@ func TestFetchExplicitlyDisabled(t *testing.T) {
 
 	cmd := exec.Command(sf, "fetch", srv.URL, "--no-comments")
 	cmd.Env = append(os.Environ(),
-		"SOCIALFETCH_LEDGER=0",
-		"SOCIALFETCH_LEDGER_BIN="+ledger,
-		"SOCIALFETCH_LEDGER_DIR="+dataDir,
+		"SOCIAL_LEDGER=0",
+		"SOCIAL_LEDGER_BIN="+ledger,
+		"SOCIAL_LEDGER_DIR="+dataDir,
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -106,7 +106,7 @@ func TestFetchExplicitlyDisabled(t *testing.T) {
 	}
 }
 
-// TestFetchWithLedger verifies SOCIALFETCH_LEDGER=1 routes the
+// TestFetchWithLedger verifies SOCIAL_LEDGER=1 routes the
 // fetched item into the ledger via subprocess: SQLite db is created,
 // `social-ledger list` reports the item, mirror tree contains
 // the article markdown.
@@ -118,9 +118,9 @@ func TestFetchWithLedger(t *testing.T) {
 
 	cmd := exec.Command(sf, "fetch", srv.URL, "--no-comments")
 	cmd.Env = append(os.Environ(),
-		"SOCIALFETCH_LEDGER=1",
-		"SOCIALFETCH_LEDGER_BIN="+ledger,
-		"SOCIALFETCH_LEDGER_DIR="+dataDir,
+		"SOCIAL_LEDGER=1",
+		"SOCIAL_LEDGER_BIN="+ledger,
+		"SOCIAL_LEDGER_DIR="+dataDir,
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -172,7 +172,7 @@ func TestFetchWithLedger(t *testing.T) {
 
 // TestFetchLedgerSurvivesMissingBinary covers the failure mode that
 // motivated the "best-effort, swallow errors" design: if the user
-// sets SOCIALFETCH_LEDGER=1 but never installed social-ledger,
+// sets SOCIAL_LEDGER=1 but never installed social-ledger,
 // the parent fetch still succeeds. The ledger failure shows up in
 // the audit log only, never as a non-zero exit on the parent.
 func TestFetchLedgerSurvivesMissingBinary(t *testing.T) {
@@ -182,8 +182,8 @@ func TestFetchLedgerSurvivesMissingBinary(t *testing.T) {
 
 	cmd := exec.Command(sf, "fetch", srv.URL, "--no-comments")
 	cmd.Env = append(os.Environ(),
-		"SOCIALFETCH_LEDGER=1",
-		"SOCIALFETCH_LEDGER_BIN=/nonexistent/social-ledger",
+		"SOCIAL_LEDGER=1",
+		"SOCIAL_LEDGER_BIN=/nonexistent/social-ledger",
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -195,7 +195,7 @@ func TestFetchLedgerSurvivesMissingBinary(t *testing.T) {
 }
 
 // TestFetchAutoDetectEnabled confirms the new tri-state default:
-// SOCIALFETCH_LEDGER unset + a discoverable binary auto-enables
+// SOCIAL_LEDGER unset + a discoverable binary auto-enables
 // the ingest. This is the path most users will hit if they install
 // both binaries — no env-var tinkering required.
 func TestFetchAutoDetectEnabled(t *testing.T) {
@@ -206,14 +206,14 @@ func TestFetchAutoDetectEnabled(t *testing.T) {
 
 	clean := []string{}
 	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, "SOCIALFETCH_LEDGER=") {
+		if !strings.HasPrefix(kv, "SOCIAL_LEDGER=") {
 			clean = append(clean, kv)
 		}
 	}
 	cmd := exec.Command(sf, "fetch", srv.URL, "--no-comments")
 	cmd.Env = append(clean,
-		"SOCIALFETCH_LEDGER_BIN="+ledger,
-		"SOCIALFETCH_LEDGER_DIR="+dataDir,
+		"SOCIAL_LEDGER_BIN="+ledger,
+		"SOCIAL_LEDGER_DIR="+dataDir,
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -237,7 +237,7 @@ func TestFetchAutoDetectDisabled(t *testing.T) {
 
 	clean := []string{}
 	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, "SOCIALFETCH_LEDGER") && !strings.HasPrefix(kv, "PATH=") {
+		if !strings.HasPrefix(kv, "SOCIAL_LEDGER") && !strings.HasPrefix(kv, "PATH=") {
 			clean = append(clean, kv)
 		}
 	}

@@ -477,7 +477,7 @@ func fetchStreamOrdered(ctx context.Context, reg *core.Registry, urls []string, 
 			fmt.Fprint(w, "\n---\n\n")
 		}
 	}
-	// Auto-ledger: when SOCIALFETCH_LEDGER=1 is set, hand the
+	// Auto-ledger: when SOCIAL_LEDGER=1 is set, hand the
 	// successful items to social-ledger via subprocess so the
 	// agent doesn't have to wire up the JSONL pipe by hand. No-op
 	// + nil error when the env var isn't set or the binary is

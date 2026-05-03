@@ -49,7 +49,7 @@ In Claude Code:
 Or, for local development from a clone of this repo:
 
 ```bash
-claude --plugin-dir ./claude-code-plugin
+claude --plugin-dir ./extensions/claude-code
 ```
 
 ## API keys
@@ -63,6 +63,6 @@ for what each provider unlocks.
 
 ## See also
 
-- [`mcpb-extension/`](https://github.com/jedi4ever/social-skills/tree/main/mcpb-extension) — Claude Desktop Extension (one-click install with API-key prompt UI)
+- [`extensions/claude-desktop/`](https://github.com/jedi4ever/social-skills/tree/main/extensions/claude-desktop) — Claude Desktop Extension (.mcpb, one-click install with API-key prompt UI)
 - [`skills/social-fetch/`](https://github.com/jedi4ever/social-skills/tree/main/skills/social-fetch) — Standalone skill (Claude Desktop, no plugin wrapper)
 - [`social-fetch mcp --ngrok`](https://github.com/jedi4ever/social-skills/blob/main/INSTALL.md#option-b-remote-mcp-via-ngrok) — Remote MCP for claude.ai

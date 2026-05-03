@@ -8,7 +8,7 @@ can pick it up without context-loading the original conversation.
 
 ## `social-fetch ledger` subcommand + user-level config
 
-**Goal:** make the `SOCIALFETCH_LEDGER*` env vars persistent across
+**Goal:** make the `SOCIAL_LEDGER*` env vars persistent across
 processes without forcing the user to remember an export line each
 shell session. Today (`ledger-tool` branch, commit `c2c0ba6`) the
 auto-ingest path only fires when env vars are set per-invocation.
@@ -17,11 +17,11 @@ auto-ingest path only fires when env vars are set per-invocation.
 
 ```
 social-fetch ledger              # status: enabled? where? which binary?
-social-fetch ledger on           # set SOCIALFETCH_LEDGER=1
-social-fetch ledger off          # SOCIALFETCH_LEDGER=0 (or remove key)
-social-fetch ledger binary <p>   # set SOCIALFETCH_LEDGER_BIN
-social-fetch ledger directory <p>  # set SOCIALFETCH_LEDGER_DIR
-social-fetch ledger reset        # remove every SOCIALFETCH_LEDGER* key
+social-fetch ledger on           # set SOCIAL_LEDGER=1
+social-fetch ledger off          # SOCIAL_LEDGER=0 (or remove key)
+social-fetch ledger binary <p>   # set SOCIAL_LEDGER_BIN
+social-fetch ledger directory <p>  # set SOCIAL_LEDGER_DIR
+social-fetch ledger reset        # remove every SOCIAL_LEDGER* key
 ```
 
 **Storage:** `$XDG_CONFIG_HOME/social-fetch/.env` (default
@@ -83,7 +83,7 @@ behaviour.
 | `medium`, `substack`, `article` | 7d | articles get edited but rarely |
 | anything else | 24h | sane middle ground |
 
-Override via `SOCIALFETCH_LEDGER_MAX_AGE=1h` (global) or per-fetch
+Override via `SOCIAL_LEDGER_MAX_AGE=1h` (global) or per-fetch
 `--max-age 30m`.
 
 **Wiring:** same shape as the auto-ingest hook — wrap

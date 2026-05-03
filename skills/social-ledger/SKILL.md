@@ -128,7 +128,7 @@ scripts/social-ledger stats
 
 Default: `$XDG_DATA_HOME/social-ledger` (typically
 `~/.local/share/social-ledger`). Override per-call with
-`--data-dir <path>`, or globally with `SOCIALFETCH_LEDGER_DIR`.
+`--data-dir <path>`, or globally with `SOCIAL_LEDGER_DIR`.
 
 The store is a single SQLite file (`ledger.db`) plus an on-disk
 markdown mirror tree (`tree/by-source/`, `tree/by-date/`,
@@ -167,7 +167,7 @@ parse target for agent code:
 ## Related
 
 - `social-fetch fetch` and friends auto-populate the ledger when
-  `SOCIALFETCH_LEDGER` is unset/auto/1 and `social-ledger`
+  `SOCIAL_LEDGER` is unset/auto/1 and `social-ledger`
   is on PATH (or bundled alongside in this skill). No env-var
   setup needed for this skill — auto-detect handles it.
 - The standalone `social-fetch` skill covers fetch / search /

@@ -1,5 +1,5 @@
 // Package ledger is a thin client for social-ledger that lives
-// in the parent social-fetch binary. When SOCIALFETCH_LEDGER=1 is in
+// in the parent social-fetch binary. When SOCIAL_LEDGER=1 is in
 // the environment, every successful fetch / timeline / research item
 // is auto-piped into `social-ledger ingest` as a subprocess so
 // agents don't have to wire up the pipeline themselves.
@@ -15,7 +15,7 @@
 //   - Subprocess (not in-process) — costs a fork+exec per call
 //     (~5-20ms on a warm binary cache) but keeps the boundary clean
 //     and means an absent / broken ledger binary degrades gracefully
-//     to "exactly the behaviour you had before SOCIALFETCH_LEDGER=1".
+//     to "exactly the behaviour you had before SOCIAL_LEDGER=1".
 //
 //   - Best-effort — every failure path writes to the supplied audit
 //     logger and returns nil. The parent fetch never fails because
@@ -46,13 +46,13 @@ import (
 // EnabledEnv is the master switch. Anything truthy ("1", "true",
 // "yes", case-insensitive) flips the auto-ingest on.
 const (
-	EnabledEnv = "SOCIALFETCH_LEDGER"
-	BinaryEnv  = "SOCIALFETCH_LEDGER_BIN"
-	DirEnv     = "SOCIALFETCH_LEDGER_DIR"
+	EnabledEnv = "SOCIAL_LEDGER"
+	BinaryEnv  = "SOCIAL_LEDGER_BIN"
+	DirEnv     = "SOCIAL_LEDGER_DIR"
 )
 
 // Enabled reports whether the auto-ingest hook should fire on this
-// invocation. Three states map to SOCIALFETCH_LEDGER:
+// invocation. Three states map to SOCIAL_LEDGER:
 //
 //	1 / true / yes / on    → explicit enable
 //	0 / false / no / off   → explicit disable (skip even if a
@@ -91,7 +91,7 @@ func autoDetectEnabled() bool {
 }
 
 // resetAutoDetectForTests clears the cached auto-detection result
-// so tests that mutate $PATH or $SOCIALFETCH_LEDGER_BIN see fresh
+// so tests that mutate $PATH or $SOCIAL_LEDGER_BIN see fresh
 // behaviour. Not exported for production use — t.Setenv already
 // implies a single-test scope, this just bridges the cache.
 func resetAutoDetectForTests() {
@@ -138,7 +138,7 @@ func Ingest(ctx context.Context, items ...core.Item) {
 	}
 
 	args := []string{"ingest"}
-	// The ledger picks up SOCIALFETCH_LEDGER_DIR from its own env
+	// The ledger picks up SOCIAL_LEDGER_DIR from its own env
 	// already, but be explicit with --data-dir so a misconfigured
 	// child env doesn't silently land items in the wrong store.
 	if dir := strings.TrimSpace(os.Getenv(DirEnv)); dir != "" {
@@ -212,7 +212,7 @@ func IngestSources(ctx context.Context, sources ...core.Source) {
 // binaryPath returns the absolute path to social-ledger. Lookup
 // order:
 //
-//  1. $SOCIALFETCH_LEDGER_BIN — explicit override
+//  1. $SOCIAL_LEDGER_BIN — explicit override
 //  2. $PATH lookup via exec.LookPath
 //  3. social-ledger as a sibling of the running social-fetch
 //     binary — handy during in-tree dev where `make build` and

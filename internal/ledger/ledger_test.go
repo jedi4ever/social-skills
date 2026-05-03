@@ -151,7 +151,7 @@ func TestIngestNoOpWhenDisabled(t *testing.T) {
 	capture := filepath.Join(t.TempDir(), "captured.jsonl")
 	bin := fakeBinary(t, capture)
 
-	// SOCIALFETCH_LEDGER=0 is explicit-off and beats auto-detect
+	// SOCIAL_LEDGER=0 is explicit-off and beats auto-detect
 	// even when the binary path resolves successfully — the
 	// no-op-when-disabled guarantee.
 	resetAutoDetectForTests()

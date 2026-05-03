@@ -64,7 +64,7 @@ social-ledger stats
 
 Default location: `$XDG_DATA_HOME/social-ledger` or
 `~/.local/share/social-ledger`. Override with `--data-dir`
-on any subcommand or set `SOCIALFETCH_LEDGER_DIR`.
+on any subcommand or set `SOCIAL_LEDGER_DIR`.
 
 ```
 ~/.local/share/social-ledger/
