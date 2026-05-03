@@ -251,3 +251,45 @@ func TestFetchAutoDetectDisabled(t *testing.T) {
 		t.Errorf("expected article title in output, got:\n%s", out)
 	}
 }
+
+// TestFetchRedirectStampsRequestURL drives the actual binary
+// against a redirect chain and confirms the JSONL output (which
+// is what the ledger consumes) carries both URLs: `url` =
+// post-redirect target, `request_url` = original input. This is
+// the end-to-end glue test for the Registry-stamps-RequestURL
+// behavior + article fetcher's redirect capture + JSON omitempty
+// shape.
+func TestFetchRedirectStampsRequestURL(t *testing.T) {
+	sf, _ := buildBinaries(t)
+
+	// final server — destination
+	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(`<!doctype html><html><head><title>Destination</title></head><body><article><p>real content</p></article></body></html>`))
+	}))
+	defer final.Close()
+
+	// short server — redirects to final
+	short := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, final.URL+"/article", http.StatusMovedPermanently)
+	}))
+	defer short.Close()
+
+	rawURL := short.URL + "/abc"
+	cmd := exec.Command(sf, "fetch", rawURL, "-f", "json", "--no-comments")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("fetch: %v\n%s", err, out)
+	}
+	body := string(out)
+	if !strings.Contains(body, `"url"`) {
+		t.Fatalf("output missing url field:\n%s", body)
+	}
+	wantURL := final.URL + "/article"
+	if !strings.Contains(body, `"url": "`+wantURL+`"`) {
+		t.Errorf("expected url=%q in output, got:\n%s", wantURL, body)
+	}
+	if !strings.Contains(body, `"request_url": "`+rawURL+`"`) {
+		t.Errorf("expected request_url=%q in output, got:\n%s", rawURL, body)
+	}
+}
