@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 
@@ -40,8 +41,28 @@ func SessionLock() (unlock func()) {
 	return navigateMu.Unlock
 }
 
-// DefaultEndpoint is the local /cmd URL fetchers POST to.
+// DefaultEndpoint is the local /cmd URL fetchers POST to when the
+// operator hasn't overridden it. The browser-bridge daemon runs
+// on 127.0.0.1:5555 by default.
 const DefaultEndpoint = "http://127.0.0.1:5555/cmd"
+
+// EndpointEnv lets operators point fetchers at a non-default
+// bridge daemon — useful when running multiple sandboxed browser
+// profiles on different ports, or pointing the bridge at a remote
+// machine via an SSH-forwarded port. Empty / unset → DefaultEndpoint.
+const EndpointEnv = "SOCIAL_BRIDGE_URL"
+
+// Endpoint returns the configured bridge URL, honoring
+// $SOCIAL_BRIDGE_URL when set and falling back to DefaultEndpoint.
+// Single source of truth for "where do fetchers POST to" so the
+// .mcpb / .mcp.json env-passthrough wiring only has to declare
+// one variable.
+func Endpoint() string {
+	if v := os.Getenv(EndpointEnv); v != "" {
+		return v
+	}
+	return DefaultEndpoint
+}
 
 // Client is a thin wrapper over the bridge's HTTP /cmd endpoint. It's
 // the connecting tissue between fetchers and the browser extension —

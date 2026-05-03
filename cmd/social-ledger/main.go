@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // Version moves with the ledger binary, independent of social-fetch.
@@ -32,7 +33,17 @@ import (
 const Version = "0.1.0"
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	start := time.Now()
+	cmd := ""
+	if len(os.Args) > 1 {
+		cmd = os.Args[1]
+	}
+	args := os.Args[2:] // positional args after the subcommand
+	err := run(os.Args[1:])
+	// Best-effort audit log — never gates the exit code or the
+	// error message. See audit.go for path / opt-out details.
+	writeAuditLine(cmd, args, start, err)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "social-ledger:", err)
 		os.Exit(1)
 	}

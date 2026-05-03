@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "social-skills",
   "display_name": "social-skills — for AI agents",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Social-web skills for AI agents. Bundles HackerNews / Reddit / GitHub / X / LinkedIn / YouTube / Bluesky / arXiv / Medium / Substack / RSS / generic article fetchers, plus search (DuckDuckGo, Brave, SerpAPI, Tavily, Perplexity, X, HN, Reddit, YouTube, Bluesky, arXiv, Google CSE), ask (Perplexity, Grok, OpenAI, Anthropic, Gemini, Tavily, SerpAPI), and a local SQLite-backed ledger of every fetched URL.",
   "long_description": "social-skills equips AI agents with structured access to the social web. Bundles two binaries: social-fetch (MCP server exposing fetch / search / ask / timeline / research / list_providers / bridge_status as tools) and social-ledger (auto-detected SQLite + FTS5 store that caches every fetch so 'have we seen this URL?' answers are instant without re-fetching). Provider chains (-p auto) gracefully fall through providers that lack keys or hit rate limits, so you can ship with whichever subset of API keys you've configured and the rest is silent.",
   "author": {
@@ -47,7 +47,12 @@
         "JINA_API_KEY": "${user_config.jina_api_key}",
         "HTML2MD_PROVIDER": "${user_config.html2md_provider}",
         "HTML2MD_READER": "${user_config.html2md_reader}",
-        "TAVILY_TOPIC": "${user_config.tavily_topic}"
+        "TAVILY_TOPIC": "${user_config.tavily_topic}",
+        "SOCIAL_LEDGER": "${user_config.social_ledger}",
+        "SOCIAL_LEDGER_DIR": "${user_config.social_ledger_dir}",
+        "SOCIAL_LEDGER_READONLY": "${user_config.social_ledger_readonly}",
+        "SOCIAL_FETCH_AUDIT": "${user_config.social_fetch_audit}",
+        "SOCIAL_BRIDGE_URL": "${user_config.social_bridge_url}"
       }
     }
   },
@@ -58,7 +63,14 @@
     {"name": "social_fetch_timeline", "description": "Recent activity for a user on X or LinkedIn."},
     {"name": "social_fetch_list_providers", "description": "Discover available providers at runtime."},
     {"name": "social_fetch_bridge_status", "description": "Probe the local browser bridge (LinkedIn / Medium / Substack)."},
-    {"name": "social_fetch_research", "description": "EXPERIMENTAL — multi-angle research workflow: decomposes a question, fans out parallel fetch/search/ask/timeline, synthesizes a markdown answer with citations."}
+    {"name": "social_fetch_research", "description": "EXPERIMENTAL — multi-angle research workflow: decomposes a question, fans out parallel fetch/search/ask/timeline, synthesizes a markdown answer with citations."},
+    {"name": "social_ledger_seen", "description": "Check whether one or more URLs are already cached in the local ledger. Use BEFORE fetching to avoid re-fetching content already saved."},
+    {"name": "social_ledger_get", "description": "Retrieve one stored item from the ledger by URL — full markdown body + frontmatter."},
+    {"name": "social_ledger_list", "description": "List ledger items, newest first. Filter by source / recency window."},
+    {"name": "social_ledger_search", "description": "FTS5 search the ledger (BM25-ranked) across title / summary / content / author / tags."},
+    {"name": "social_ledger_stats", "description": "Counts, sizes, oldest/newest in the ledger."},
+    {"name": "social_ledger_record", "description": "Store one URL+content pair in the ledger (e.g. after a Claude WebFetch). Refused when SOCIAL_LEDGER_READONLY=1."},
+    {"name": "social_ledger_forget", "description": "Drop one item from the ledger. Refused when SOCIAL_LEDGER_READONLY=1."}
   ],
   "compatibility": {
     "platforms": ["darwin"]
@@ -215,6 +227,46 @@
       "sensitive": false,
       "required": false,
       "default": ""
+    },
+    "social_ledger": {
+      "type": "string",
+      "title": "Ledger mode",
+      "description": "auto / 1 / 0. Default `auto` enables the ledger when social-ledger is bundled (always true in this .mcpb). `1` = explicit on; `0` = explicit off. The ledger caches every fetch in SQLite + FTS5 so 'have we seen this URL?' is instant.",
+      "sensitive": false,
+      "required": false,
+      "default": "auto"
+    },
+    "social_ledger_dir": {
+      "type": "string",
+      "title": "Ledger storage directory",
+      "description": "Override where social-ledger stores its SQLite + mirror tree. Default: $XDG_DATA_HOME/social-ledger or ~/.local/share/social-ledger.",
+      "sensitive": false,
+      "required": false,
+      "default": ""
+    },
+    "social_ledger_readonly": {
+      "type": "string",
+      "title": "Ledger read-only mode",
+      "description": "`1` disables ledger writes (record / forget / auto-ingest). Reads (seen / get / list / search / stats) keep working. Default `0` = writes allowed. Useful for research-only agent profiles that should consult but not mutate the ledger.",
+      "sensitive": false,
+      "required": false,
+      "default": "0"
+    },
+    "social_fetch_audit": {
+      "type": "string",
+      "title": "Audit log",
+      "description": "`0` disables the always-on audit log; `1` (default) enables it. Audit lines record every fetch / MCP tool call for `social-fetch monitor`.",
+      "sensitive": false,
+      "required": false,
+      "default": "1"
+    },
+    "social_bridge_url": {
+      "type": "string",
+      "title": "Browser-bridge URL",
+      "description": "Local Chrome-bridge daemon endpoint. Default: http://127.0.0.1:5555/cmd. Change when running multiple sandboxed browser profiles or forwarding to a remote machine.",
+      "sensitive": false,
+      "required": false,
+      "default": "http://127.0.0.1:5555/cmd"
     }
   }
 }

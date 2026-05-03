@@ -1,0 +1,37 @@
+{
+  "$comment": "When this Claude Code plugin is enabled, register social-fetch as an MCP server so the agent gets fetch / search / ask / timeline / research / ledger tools auto-wired (no shell-out via the skill, in-process MCP). The `command: social-fetch` requires the binary on PATH — see ./README.md for install. Env passthrough lets the user configure API keys + ledger/bridge settings from their shell or .env without editing this file.",
+  "mcpServers": {
+    "social-skills": {
+      "command": "social-fetch",
+      "args": ["mcp"],
+      "env": {
+        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+        "PERPLEXITY_API_KEY": "${PERPLEXITY_API_KEY}",
+        "XAI_API_KEY": "${XAI_API_KEY}",
+        "GOOGLE_API_KEY": "${GOOGLE_API_KEY}",
+        "GOOGLE_CSE_ID": "${GOOGLE_CSE_ID}",
+        "TAVILY_API_KEY": "${TAVILY_API_KEY}",
+        "SERPAPI_KEY": "${SERPAPI_KEY}",
+        "BRAVE_API_KEY": "${BRAVE_API_KEY}",
+        "X_API_KEY": "${X_API_KEY}",
+        "X_API_SECRET": "${X_API_SECRET}",
+        "YOUTUBE_API_KEY": "${YOUTUBE_API_KEY}",
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}",
+        "BLUESKY_HANDLE": "${BLUESKY_HANDLE}",
+        "BLUESKY_APP_PASSWORD": "${BLUESKY_APP_PASSWORD}",
+        "JINA_API_KEY": "${JINA_API_KEY}",
+        "HTML2MD_PROVIDER": "${HTML2MD_PROVIDER}",
+        "HTML2MD_READER": "${HTML2MD_READER}",
+        "TAVILY_TOPIC": "${TAVILY_TOPIC}",
+        "SOCIAL_LEDGER": "${SOCIAL_LEDGER}",
+        "SOCIAL_LEDGER_BIN": "${SOCIAL_LEDGER_BIN}",
+        "SOCIAL_LEDGER_DIR": "${SOCIAL_LEDGER_DIR}",
+        "SOCIAL_LEDGER_READONLY": "${SOCIAL_LEDGER_READONLY}",
+        "SOCIAL_FETCH_AUDIT": "${SOCIAL_FETCH_AUDIT}",
+        "SOCIAL_FETCH_AUDIT_PATH": "${SOCIAL_FETCH_AUDIT_PATH}",
+        "SOCIAL_BRIDGE_URL": "${SOCIAL_BRIDGE_URL}"
+      }
+    }
+  }
+}

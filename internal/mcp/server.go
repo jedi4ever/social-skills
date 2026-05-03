@@ -90,6 +90,20 @@ func registerTools(s *server.MCPServer, cfg Config) {
 	addListProvidersTool(s, cfg)
 	addBridgeStatusTool(s, cfg)
 	addResearchTool(s, cfg)
+	// Ledger tools register unconditionally — the per-tool handlers
+	// check ledger availability at call time and return a friendly
+	// error when social-ledger isn't installed. That way an agent
+	// listing tools always sees the same catalog (no surprises when
+	// a tool appears/disappears), and the "you're missing the
+	// ledger binary" diagnostic is one tool-call away rather than
+	// hidden behind a missing tool.
+	addLedgerSeenTool(s, cfg)
+	addLedgerGetTool(s, cfg)
+	addLedgerListTool(s, cfg)
+	addLedgerSearchTool(s, cfg)
+	addLedgerStatsTool(s, cfg)
+	addLedgerRecordTool(s, cfg)
+	addLedgerForgetTool(s, cfg)
 }
 
 // openToolAudit opens the always-on global audit log scoped to an MCP

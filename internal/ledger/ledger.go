@@ -31,6 +31,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -46,10 +47,35 @@ import (
 // EnabledEnv is the master switch. Anything truthy ("1", "true",
 // "yes", case-insensitive) flips the auto-ingest on.
 const (
-	EnabledEnv = "SOCIAL_LEDGER"
-	BinaryEnv  = "SOCIAL_LEDGER_BIN"
-	DirEnv     = "SOCIAL_LEDGER_DIR"
+	EnabledEnv  = "SOCIAL_LEDGER"
+	BinaryEnv   = "SOCIAL_LEDGER_BIN"
+	DirEnv      = "SOCIAL_LEDGER_DIR"
+	ReadOnlyEnv = "SOCIAL_LEDGER_READONLY"
 )
+
+// ReadOnly reports whether write operations against the ledger
+// should be skipped / refused. When SOCIAL_LEDGER_READONLY=1 (or
+// any truthy value), the auto-ingest hook silently no-ops and
+// the MCP record / forget tools return a friendly error
+// explaining the toggle. Useful for read-only agent profiles
+// (research-only, quota-conscious, audit) where the ledger is
+// a knowledge base to consult but not mutate.
+//
+// Independent of Enabled() — a ledger can be enabled-but-readonly
+// (queries work, writes refused) or disabled (nothing works).
+func ReadOnly() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(ReadOnlyEnv)))
+	switch v {
+	case "1", "true", "yes", "on", "ro":
+		return true
+	}
+	return false
+}
+
+// ErrReadOnly is the typed sentinel write paths return when
+// SOCIAL_LEDGER_READONLY=1 is set. Callers compose this into
+// MCP tool errors with stable messaging.
+var ErrReadOnly = errors.New("ledger is in read-only mode (SOCIAL_LEDGER_READONLY=1) — record / forget / ingest are disabled. Set SOCIAL_LEDGER_READONLY=0 (or unset) to re-enable writes.")
 
 // Enabled reports whether the auto-ingest hook should fire on this
 // invocation. Three states map to SOCIAL_LEDGER:
@@ -112,6 +138,15 @@ func Ingest(ctx context.Context, items ...core.Item) {
 		return
 	}
 	audit := core.AuditFromContext(ctx)
+	if ReadOnly() {
+		// SOCIAL_LEDGER_READONLY=1 — silently skip the write but
+		// log it so an operator running `social-fetch monitor`
+		// can see the toggle is taking effect. Not a failure.
+		if audit != nil {
+			audit.Logf("ledger: read-only mode active, skipping ingest of %d item(s)", len(items))
+		}
+		return
+	}
 
 	bin, err := binaryPath()
 	if err != nil {
