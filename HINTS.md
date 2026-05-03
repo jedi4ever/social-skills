@@ -1,4 +1,4 @@
-# social-fetch — hints & gotchas
+# social-skills — hints & gotchas
 
 Accumulated landmines from real failures. Things the API responses won't
 tell you, the docs bury, or the error message points the wrong way.

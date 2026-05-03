@@ -1,4 +1,4 @@
-# Installing social-fetch
+# Installing social-skills
 
 social-fetch ships in four flavors, all wrapping the same Go binary —
 pick whichever matches your install style:

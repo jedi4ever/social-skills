@@ -1,4 +1,4 @@
-# social-fetch — repo conventions
+# social-skills — repo conventions
 
 ## Error handling for external APIs
 
