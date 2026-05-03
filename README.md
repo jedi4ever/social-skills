@@ -167,10 +167,11 @@ If you don't need any of the above and just want the binary:
 
 ```bash
 go install github.com/jedi4ever/social-skills/cmd/social-fetch@latest
-# or download a release tarball:
-#   social-skills-0.10.0-darwin-arm64.tar.gz
-#   social-skills-0.10.0-darwin-amd64.tar.gz
-#   social-skills-0.10.0-linux-amd64.tar.gz
+# or download a release tarball from
+# https://github.com/jedi4ever/social-skills/releases — files like:
+#   social-skills-<version>-darwin-arm64.tar.gz
+#   social-skills-<version>-darwin-amd64.tar.gz
+#   social-skills-<version>-linux-amd64.tar.gz
 ```
 
 Build from source:

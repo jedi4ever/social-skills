@@ -32,7 +32,7 @@ Likely candidates worth pre-checking before assuming a fetch is broken:
 | X v2 recent search | 7-day window on `start_time` | HTTP 400, no body explanation | Pre-flighted by `xsearch.go`. Use `--last 7d` or shorter. Older needs paid tier. |
 | SerpAPI | 100 searches/month free | HTTP 401 that reads like auth failure | Check the dashboard usage page — "tier exhausted" rendered as auth error. |
 | Google CSE | 100 q/day free, then $5/1k | quota error mid-script, silent transition | Watch the Cloud Console quota; budget separately. |
-| Google Gemini ask | 1,500 req/day on `gemini-flash-latest` | HTTP 429 with no clear "free-tier limit" indicator | Wait until UTC midnight or upgrade billing tier. |
+| Google Gemini ask | 1,500 req/day on `gemini-2.5-flash` (free tier). The `gemini-flash-latest` and `gemini-2.5-pro` aliases require a paid Cloud project. | HTTP 429 with no clear "free-tier limit" indicator | Wait until UTC midnight or upgrade billing tier. |
 | YouTube Data v3 | 10k units/day; `search` costs **100** units (not 1) | quota exhaustion much faster than expected | Use `videos`/`comments` calls (1 unit each) when possible; `search` only when needed. |
 | GitHub | 60 req/hr unauthenticated | HTTP 403 rate-limit | Set `GITHUB_TOKEN` → 5,000 req/hr. |
 | Reddit `search.json` | per-IP rate limit (undocumented exact threshold) | bursts return empty results | Space out queries; reduce parallelism (`-j 1`). |
@@ -88,12 +88,17 @@ isn't always clear about this.
 `OPENAI_API_KEY` requires billing enabled before any request works.
 Tool calls (`web_search`) bill a per-call fee on top of token usage.
 
-**Google APIs — each API must be enabled separately.**
-Even with one `GOOGLE_API_KEY`, you have to go to the Cloud Console
-and enable **each** of: Custom Search API (for `google` search),
-Generative Language API (for `google` ask), YouTube Data API v3 (for
-`youtube` fetch + search). One shared key, three separate "Enable"
-buttons.
+**Google APIs — three independent providers, three separate enables.**
+Each API needs to be enabled separately in the Cloud Console:
+Custom Search API (for `google` search) + a separate engine ID
+(`GOOGLE_CSE_ID`), Generative Language API (for `gemini` ask;
+`GEMINI_API_KEY` preferred, `GOOGLE_API_KEY` accepted as fallback),
+YouTube Data API v3 (for `youtube` fetch + search;
+`YOUTUBE_API_KEY`). The keys are independent — see API_KEYS.md for
+the per-API setup. Note: Google removed the "Search the entire web"
+toggle for new Custom Search Engines in 2024 — new CSEs are
+restricted to listed sites only; prefer `serpapi` / `brave` /
+`tavily` for general web search.
 
 **LinkedIn — no anonymous read path.**
 Every LinkedIn fetch / timeline / search goes through the bridge.
