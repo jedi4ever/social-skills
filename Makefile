@@ -21,6 +21,7 @@ GO_BUILD_FLAGS := -ldflags="-s -w" -trimpath
 SKILL_INSTALL_DIR ?= $(HOME)/.claude/skills/social-fetch
 
 .PHONY: all help build install test test-integration test-live test-cover vet fmt lint run demo clean cli-help \
+        check install-hooks \
         skill-build skill-install skill-clean skill-package claude-desktop-extension-package extension-validate \
         bridge-package plugin-build plugin-package gh-sync-secrets gh-sync-secrets-dry \
         ledger-build ledger-test \
@@ -300,6 +301,11 @@ check:  ## Run the same checks CI runs (gofmt + vet + test + plugin SKILL.md syn
 	@echo "✓ plugin SKILL.md in sync"
 	@echo ""
 	@echo "all checks passed — safe to commit"
+
+install-hooks:  ## Install the .githooks/* git hooks (one-time, per clone)
+	@git config core.hooksPath .githooks
+	@echo "✓ git hooks active — pre-commit will run 'make check' on every commit"
+	@echo "  bypass with 'git commit --no-verify' when needed"
 
 run: build  ## Build and fetch URL (override with URL=...)
 	$(BIN) fetch $(URL)

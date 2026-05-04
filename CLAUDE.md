@@ -146,6 +146,21 @@ zip; an unbumped version means two zips with the same name and
 older Chrome reloads of the same nominal version may not pick up
 your changes.
 
+## Pre-commit hook — run it once per clone
+
+Install the in-repo git hook with:
+
+```bash
+make install-hooks
+```
+
+Sets `core.hooksPath` to `.githooks/`, so `git commit` runs `make
+check` (gofmt + vet + tests + plugin SKILL.md sync) before the
+commit lands. Same battery CI runs on push, so anything that
+passes locally passes there too — no green-CI-then-fix loop. Skip
+on a specific commit with `git commit --no-verify` when you
+genuinely need to (e.g. WIP that won't be pushed).
+
 ## Versioning
 
 `cmd/social-fetch/main.go` declares a `Version` constant that's

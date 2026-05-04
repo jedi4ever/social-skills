@@ -1,0 +1,24 @@
+#!/bin/sh
+# Pre-commit hook for social-skills.
+#
+# Runs `make check` (gofmt + go vet + go test + plugin-SKILL.md sync).
+# Same battery CI runs on every push, so anything that passes here
+# passes there — saving the round-trip of a green-CI-then-fix loop.
+#
+# Install once with `make install-hooks` (sets git's core.hooksPath
+# to .githooks). Skip on a specific commit with `git commit --no-verify`
+# when you genuinely need to (rare; usually means you're committing
+# WIP that won't be pushed).
+
+set -e
+
+# Skip on merge commits — git's MERGE_MSG file existing is the
+# canonical signal. The merge already preserves both parents'
+# checked-in state; running tests inside the merge is rarely useful
+# and makes conflict resolution painful.
+if [ -f .git/MERGE_MSG ]; then
+    exit 0
+fi
+
+# `make check` itself prints status lines per step.
+exec make check
