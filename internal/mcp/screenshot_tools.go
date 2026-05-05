@@ -52,9 +52,20 @@ import (
 
 // inlineCap is the max raw PNG size we'll embed inline as
 // ImageContent. Anthropic's per-image cap is 5 MB; base64 adds
-// ~33 % overhead; we leave 2x headroom on top for the rest of
-// the response context.
-const inlineCap = 1_500_000
+// ~33 % overhead, so 3 MB raw → ~4 MB base64, comfortably under
+// the limit while leaving headroom for the rest of the response
+// context. The previous 1.5 MB value was over-conservative and
+// silently dropped many real-world page screenshots into the
+// "URL only" path that doesn't work for cloud-side agents
+// (claude.ai, ChatGPT, etc.).
+const inlineCap = 3_000_000
+
+// autoCropHeight is the fallback height we crop to when a
+// screenshot would otherwise exceed inlineCap. Picked at 4096 so
+// the result captures a full above-the-fold + first scrollful
+// view; agents who need more can paginate via
+// social_fetch_read_screenshot's offset_y.
+const autoCropHeight = 4096
 
 // readScreenshotMaxHeightDefault is what the read tool uses when
 // the agent doesn't specify max_height. Picked so a 1920px-wide
@@ -122,7 +133,8 @@ func addScreenshotTool(s *server.MCPServer, cfg Config) {
 		// driver) so the cap is consistent regardless of which
 		// engine produced the bytes.
 		pngBytes := res.PNG
-		var cropped bool
+		var cropped, autoCropped bool
+		appliedMax := args.MaxHeight
 		if args.MaxHeight > 0 {
 			out, didCrop, cerr := headless.CropPNGTop(pngBytes, args.MaxHeight)
 			if cerr != nil {
@@ -131,6 +143,25 @@ func addScreenshotTool(s *server.MCPServer, cfg Config) {
 			} else {
 				pngBytes = out
 				cropped = didCrop
+			}
+		}
+		// Auto-crop oversized screenshots when the caller didn't
+		// already cap the height. Cloud-side agents (claude.ai,
+		// remote MCP) only see the image via inline ImageContent;
+		// silently letting a 30k-px tall page fall through to
+		// "URL only" leaves them blind. Crop to autoCropHeight so
+		// the inline path always carries something useful, and
+		// surface auto_cropped + next_offset_y so the agent knows
+		// how to walk the rest of the page if it cares.
+		if !cropped && len(pngBytes) > inlineCap {
+			out, didCrop, cerr := headless.CropPNGTop(pngBytes, autoCropHeight)
+			if cerr != nil {
+				audit.Logf("screenshot %s auto-crop failed: %v", args.URL, cerr)
+			} else if didCrop {
+				pngBytes = out
+				cropped = true
+				autoCropped = true
+				appliedMax = autoCropHeight
 			}
 		}
 		w, h, _ := headless.PNGDims(pngBytes)
@@ -148,52 +179,60 @@ func addScreenshotTool(s *server.MCPServer, cfg Config) {
 			"original_width":  origW,
 			"original_height": origH,
 			"cropped":         cropped,
+			"auto_cropped":    autoCropped,
 		}
 		// When cropped, surface where the agent's next slice would
-		// start so a multi-step read is one number away.
-		if cropped && origH > h {
+		// start so a multi-step read is one number away. Use
+		// appliedMax (the actual crop height that took effect) so
+		// slices_remaining is correct for both manual and
+		// auto-crop paths.
+		if cropped && origH > h && appliedMax > 0 {
 			env["next_offset_y"] = h
-			env["slices_remaining"] = (origH - h + args.MaxHeight - 1) / args.MaxHeight
+			env["slices_remaining"] = (origH - h + appliedMax - 1) / appliedMax
 		}
 
-		// Daemon-mode preferred path: upload to the ledger daemon
-		// so the resulting URL works across machines / containers.
-		// MCP server, headless daemon, ledger daemon may all live
-		// in different processes — only HTTP transport is
-		// guaranteed; filesystem sharing is not.
-		var contentFile string
+		// We populate THREE access paths so every client has a
+		// way to actually see the image:
+		//
+		//   1. inline ImageContent (added below) — Claude Desktop
+		//      renders natively; size-capped at inlineCap.
+		//   2. content_file (local /tmp PNG) — Claude Code calls
+		//      its built-in Read tool on the path; the agent's
+		//      vision sees the image without going through MCP
+		//      again. Only useful when MCP server and agent share
+		//      a filesystem (typical local install).
+		//   3. content_url (ledger daemon HTTP) — works for
+		//      cross-machine / containerised setups where the
+		//      agent or its WebFetch tool can reach the daemon
+		//      over the network.
+		//
+		// Always write the local file (cheap), always try the
+		// daemon upload (transparent fallback), always inline
+		// when small. Costs one tiny disk write + one HTTP POST
+		// per screenshot; benefit is "works in every client" with
+		// no per-tool branching.
 		var contentURL string
+		path, werr := writeScreenshotTemp(pngBytes)
+		if werr != nil {
+			audit.Logf("screenshot %s write failed: %v", args.URL, werr)
+			return mcp.NewToolResultError(fmt.Sprintf("write png: %v", werr)), nil
+		}
+		contentFile := path
+
 		if !ledger.Disabled() {
 			c := ledger.NewDaemonClient()
 			if c.Reachable(ctx) {
 				up, uerr := c.UploadScreenshot(ctx, pngBytes, "")
 				if uerr == nil {
 					contentURL = up.URL
-					audit.Logf("screenshot %s → %s (%d bytes, engine=%s, via daemon)", args.URL, up.URL, len(pngBytes), res.Engine)
 				} else {
-					audit.Logf("screenshot %s daemon upload failed (%v), falling back to local file", args.URL, uerr)
+					audit.Logf("screenshot %s daemon upload failed: %v", args.URL, uerr)
 				}
 			}
 		}
+		audit.Logf("screenshot %s → file=%s url=%s (%d bytes, engine=%s)", args.URL, contentFile, contentURL, len(pngBytes), res.Engine)
 
-		// Local fallback: write to a temp file so co-located
-		// agents (Claude Code on the same machine) can read it
-		// via filesystem. Only useful when MCP server and agent
-		// share a filesystem; cross-machine agents rely on the
-		// inline ImageContent or content_url paths.
-		if contentURL == "" {
-			path, werr := writeScreenshotTemp(pngBytes)
-			if werr != nil {
-				audit.Logf("screenshot %s write failed: %v", args.URL, werr)
-				return mcp.NewToolResultError(fmt.Sprintf("write png: %v", werr)), nil
-			}
-			contentFile = path
-			audit.Logf("screenshot %s → %s (%d bytes, engine=%s, local)", args.URL, path, len(pngBytes), res.Engine)
-		}
-
-		if contentFile != "" {
-			env["content_file"] = contentFile
-		}
+		env["content_file"] = contentFile
 		if contentURL != "" {
 			env["content_url"] = contentURL
 		}
@@ -203,7 +242,7 @@ func addScreenshotTool(s *server.MCPServer, cfg Config) {
 		// cloud LLMs that can't reach 127.0.0.1.
 		inlined := len(pngBytes) <= inlineCap
 		env["inline"] = inlined
-		env["read_with"] = readWithGuidance(inlined, contentURL != "", contentFile != "")
+		env["read_with"] = readWithGuidance(inlined, contentURL != "", true)
 
 		return buildScreenshotResult(env, pngBytes, inlined), nil
 	}))
@@ -411,16 +450,20 @@ func buildScreenshotResult(env map[string]any, png []byte, inline bool) *mcp.Cal
 // reasoning on a path that doesn't apply (e.g. content_file when
 // the MCP server and agent live on different machines).
 func readWithGuidance(inlined, haveURL, haveFile bool) string {
-	if inlined {
-		return "PNG attached inline as image content — Claude Desktop / vision-capable clients render it natively. content_url / content_file are also provided for clients that prefer URL or filesystem paths."
-	}
+	// Three viewing paths, listed in order from "best UX" → "still
+	// works in degraded environments". Always include all that are
+	// populated so the agent picks based on its capabilities.
 	switch {
+	case inlined && haveURL:
+		return "Best path: PNG is attached inline as image content (Claude Desktop renders natively). For Claude Code, call the built-in Read tool on `content_file` to see the image rendered in chat. `content_url` works for cross-machine / remote MCP setups."
+	case inlined:
+		return "PNG attached inline as image content — Claude Desktop renders natively. Claude Code: call the built-in Read tool on `content_file`."
 	case haveURL && haveFile:
-		return "Image too large to inline. Call social_fetch_read_screenshot with `filename` (extract the basename from content_url) for a vision-friendly cropped slice. Or fetch content_url directly when reachable; or read content_file when MCP server and agent share a filesystem."
+		return "Image too large to inline. Claude Code: Read tool on `content_file` (renders in chat). Claude Desktop: social_fetch_read_file with `content_file`. Cross-machine: call social_fetch_read_screenshot with `filename` (basename of content_url) for a vision-friendly cropped slice, or fetch content_url directly when reachable."
 	case haveURL:
-		return "Image too large to inline. Call social_fetch_read_screenshot with `filename` (extract the basename from content_url) to get a cropped slice. Or fetch content_url directly when reachable."
+		return "Image too large to inline. Call social_fetch_read_screenshot with `filename` (basename of content_url) for a cropped slice, or fetch content_url directly when reachable."
 	default:
-		return "Image too large to inline. Read content_file (Claude Code: Read tool; Claude Desktop: social_fetch_read_file) — or call social_fetch_read_screenshot with `filename` (basename of content_file) for a cropped vision-friendly slice."
+		return "Image too large to inline. Claude Code: Read on `content_file`. Claude Desktop: social_fetch_read_file with `content_file`. Or call social_fetch_read_screenshot for a cropped slice."
 	}
 }
 
