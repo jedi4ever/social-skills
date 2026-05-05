@@ -222,7 +222,13 @@ func addScreenshotTool(s *server.MCPServer, cfg Config) {
 		if !ledger.Disabled() {
 			c := ledger.NewDaemonClient()
 			if c.Reachable(ctx) {
-				up, uerr := c.UploadScreenshot(ctx, pngBytes, "")
+				// Pass the local-file basename to the daemon so
+				// content_file and content_url end up referring
+				// to the same filename. Without this each side
+				// invokes its own os.CreateTemp and we get two
+				// random suffixes that confuse anyone correlating
+				// the two paths in logs / debug output.
+				up, uerr := c.UploadScreenshot(ctx, pngBytes, filepath.Base(path))
 				if uerr == nil {
 					contentURL = up.URL
 				} else {
