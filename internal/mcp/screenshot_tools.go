@@ -121,57 +121,62 @@ func addScreenshotTool(s *server.MCPServer, cfg Config) {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		// Capture the original dimensions + size BEFORE any
-		// cropping so the agent can decide whether the slice
-		// they're seeing is the whole page or just a window. A
-		// 30 000 px tall page cropped to 4096 still tells the
-		// agent there's more below at y=4096.
-		origW, origH, _ := headless.PNGDims(res.PNG)
-		origBytes := len(res.PNG)
+		// Two distinct PNG views:
+		//
+		//   fullPNG   — the unmodified capture. Always what we
+		//               persist (file + daemon) so read_screenshot
+		//               can paginate truthfully no matter what
+		//               crop the inline view used.
+		//   inlinePNG — what we embed as ImageContent. Cropped to
+		//               fit the inline cap (either by user's
+		//               max_height or by auto-crop) when needed;
+		//               same as fullPNG for short pages.
+		//
+		// Earlier versions stored inlinePNG and then advertised
+		// `slices_remaining: N` based on the original height —
+		// promising slices that didn't exist in storage. Splitting
+		// the two views fixes that: the storage is always
+		// paginatable, the inline view is always vision-friendly.
+		fullPNG := res.PNG
+		origW, origH, _ := headless.PNGDims(fullPNG)
+		origBytes := len(fullPNG)
 
-		// Optional crop. Applied at the MCP layer (not the headless
-		// driver) so the cap is consistent regardless of which
-		// engine produced the bytes.
-		pngBytes := res.PNG
+		inlinePNG := fullPNG
 		var cropped, autoCropped bool
 		appliedMax := args.MaxHeight
 		if args.MaxHeight > 0 {
-			out, didCrop, cerr := headless.CropPNGTop(pngBytes, args.MaxHeight)
+			out, didCrop, cerr := headless.CropPNGTop(inlinePNG, args.MaxHeight)
 			if cerr != nil {
-				// Crop failure isn't fatal — log and use original.
 				audit.Logf("screenshot %s crop failed: %v", args.URL, cerr)
 			} else {
-				pngBytes = out
+				inlinePNG = out
 				cropped = didCrop
 			}
 		}
-		// Auto-crop oversized screenshots when the caller didn't
-		// already cap the height. Cloud-side agents (claude.ai,
-		// remote MCP) only see the image via inline ImageContent;
-		// silently letting a 30k-px tall page fall through to
-		// "URL only" leaves them blind. Crop to autoCropHeight so
-		// the inline path always carries something useful, and
-		// surface auto_cropped + next_offset_y so the agent knows
-		// how to walk the rest of the page if it cares.
-		if !cropped && len(pngBytes) > inlineCap {
-			out, didCrop, cerr := headless.CropPNGTop(pngBytes, autoCropHeight)
+		// Auto-crop oversized inline view when the caller didn't
+		// already cap. Cloud-side agents (claude.ai, remote MCP)
+		// only see the image via inline ImageContent; silently
+		// letting a 30k-px tall page exceed the cap leaves them
+		// blind. fullPNG stays the full page in storage either way.
+		if !cropped && len(inlinePNG) > inlineCap {
+			out, didCrop, cerr := headless.CropPNGTop(inlinePNG, autoCropHeight)
 			if cerr != nil {
 				audit.Logf("screenshot %s auto-crop failed: %v", args.URL, cerr)
 			} else if didCrop {
-				pngBytes = out
+				inlinePNG = out
 				cropped = true
 				autoCropped = true
 				appliedMax = autoCropHeight
 			}
 		}
-		w, h, _ := headless.PNGDims(pngBytes)
+		w, h, _ := headless.PNGDims(inlinePNG)
 
 		env := map[string]any{
 			"url":             args.URL,
 			"final_url":       res.FinalURL,
 			"engine":          res.Engine,
 			"full_page":       fullPage,
-			"content_bytes":   len(pngBytes),
+			"content_bytes":   len(inlinePNG),
 			"content_type":    "image/png",
 			"width":           w,
 			"height":          h,
@@ -181,11 +186,9 @@ func addScreenshotTool(s *server.MCPServer, cfg Config) {
 			"cropped":         cropped,
 			"auto_cropped":    autoCropped,
 		}
-		// When cropped, surface where the agent's next slice would
-		// start so a multi-step read is one number away. Use
-		// appliedMax (the actual crop height that took effect) so
-		// slices_remaining is correct for both manual and
-		// auto-crop paths.
+		// Pagination metadata — only set when there's actually
+		// more to read in the stored full PNG. appliedMax tells
+		// us the slice height the agent should request next.
 		if cropped && origH > h && appliedMax > 0 {
 			env["next_offset_y"] = h
 			env["slices_remaining"] = (origH - h + appliedMax - 1) / appliedMax
@@ -208,11 +211,11 @@ func addScreenshotTool(s *server.MCPServer, cfg Config) {
 		//
 		// Always write the local file (cheap), always try the
 		// daemon upload (transparent fallback), always inline
-		// when small. Costs one tiny disk write + one HTTP POST
-		// per screenshot; benefit is "works in every client" with
-		// no per-tool branching.
+		// when small. Both file and URL store fullPNG so a follow-
+		// up read_screenshot call can paginate the unscaled
+		// original — even when inline is a cropped slice.
 		var contentURL string
-		path, werr := writeScreenshotTemp(pngBytes)
+		path, werr := writeScreenshotTemp(fullPNG)
 		if werr != nil {
 			audit.Logf("screenshot %s write failed: %v", args.URL, werr)
 			return mcp.NewToolResultError(fmt.Sprintf("write png: %v", werr)), nil
@@ -228,7 +231,7 @@ func addScreenshotTool(s *server.MCPServer, cfg Config) {
 				// invokes its own os.CreateTemp and we get two
 				// random suffixes that confuse anyone correlating
 				// the two paths in logs / debug output.
-				up, uerr := c.UploadScreenshot(ctx, pngBytes, filepath.Base(path))
+				up, uerr := c.UploadScreenshot(ctx, fullPNG, filepath.Base(path))
 				if uerr == nil {
 					contentURL = up.URL
 				} else {
@@ -236,9 +239,10 @@ func addScreenshotTool(s *server.MCPServer, cfg Config) {
 				}
 			}
 		}
-		audit.Logf("screenshot %s → file=%s url=%s (%d bytes, engine=%s)", args.URL, contentFile, contentURL, len(pngBytes), res.Engine)
+		audit.Logf("screenshot %s → file=%s url=%s (full=%d bytes, inline=%d bytes, engine=%s)", args.URL, contentFile, contentURL, len(fullPNG), len(inlinePNG), res.Engine)
 
 		env["content_file"] = contentFile
+		env["stored_bytes"] = len(fullPNG)
 		if contentURL != "" {
 			env["content_url"] = contentURL
 		}
@@ -246,11 +250,11 @@ func addScreenshotTool(s *server.MCPServer, cfg Config) {
 		// Inline image content when small enough. Claude Desktop
 		// renders this natively (no follow-up fetch); same for
 		// cloud LLMs that can't reach 127.0.0.1.
-		inlined := len(pngBytes) <= inlineCap
+		inlined := len(inlinePNG) <= inlineCap
 		env["inline"] = inlined
 		env["read_with"] = readWithGuidance(inlined, contentURL != "", true)
 
-		return buildScreenshotResult(env, pngBytes, inlined), nil
+		return buildScreenshotResult(env, inlinePNG, inlined), nil
 	}))
 }
 
@@ -314,6 +318,31 @@ func addReadScreenshotTool(s *server.MCPServer, cfg Config) {
 		offsetY := args.OffsetY
 		if offsetY < 0 {
 			offsetY = 0
+		}
+
+		// End-of-pagination guard: when the agent walks past the
+		// last slice (offset_y >= original height), don't error —
+		// return a small "you've reached the end" envelope with no
+		// image. Saves the agent from having to inspect error
+		// messages to detect "I asked one too many times."
+		if offsetY >= origH {
+			audit.Logf("read_screenshot %s offset=%d at/past end (orig_h=%d)", source, offsetY, origH)
+			env := map[string]any{
+				"source":           source,
+				"original_bytes":   origBytes,
+				"original_width":   origW,
+				"original_height":  origH,
+				"offset_y":         offsetY,
+				"end_of_image":     true,
+				"slices_remaining": 0,
+				"hint":             fmt.Sprintf("offset_y=%d is at/past the page height (%d). No more slices to read.", offsetY, origH),
+			}
+			body, _ := json.MarshalIndent(env, "", "  ")
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					mcp.TextContent{Type: mcp.ContentTypeText, Text: string(body)},
+				},
+			}, nil
 		}
 
 		var cropped bool

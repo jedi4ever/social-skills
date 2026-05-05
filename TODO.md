@@ -118,3 +118,7 @@ docker container for different deamons
 
 ====
 /monitor , /health endpoints on daemons
+====
+ledger fetch autostore ?????
+=====
+daytona-cli spnins up 
