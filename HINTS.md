@@ -185,10 +185,32 @@ Knobs:
 |---|---|---|
 | `SOCIAL_LEDGER_DAEMON_URL` | http://127.0.0.1:5557 | clients look here; set to remote URL for cross-host use |
 | `SOCIAL_LEDGER_DAEMON_DISABLE` | unset | non-empty = clients always use direct store / subprocess |
+| `SOCIAL_LEDGER_PROJECT` | `social_fetch` | per-project subdir under the data dir; `<base>/projects/<NAME>/`. Default `social_fetch` is the bucket every fetch lands in unless you set the var to switch contexts. Run separate daemons on different ports for separate projects. Pre-projects bare ledgers migrate automatically on first run. |
 
 Don't run `social-ledger ingest` (or any write subcommand) while
 the daemon is up — both processes will fight for the SQLite write
 lock. Stop the daemon first, run the CLI, restart the daemon.
+
+---
+
+## Local browser bookmarks (`social-fetch bookmarks`)
+
+Reads Chrome's Bookmarks JSON file (per profile) and lists matching
+entries — date-range filtered, folder-filtered, multi-profile aware.
+Today's `--platform` value is `chrome` (default + only); future
+platforms (Twitter bookmarks, Reddit saved posts) plug in as more
+values.
+
+```bash
+social-fetch bookmarks list --since 2026-04-01            # added in April
+social-fetch bookmarks list --folder-contains AI -n 20    # narrowed
+social-fetch bookmarks list --all-profiles -f json        # every profile
+social-fetch bookmarks profiles                           # available profiles
+```
+
+Reads the local Bookmarks JSON Chrome flushes to disk — no
+extension or daemon needed. Bookmarks added moments before the
+read may not appear (Chrome flushes within a second or two).
 
 ---
 

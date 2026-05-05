@@ -255,6 +255,8 @@ func run(args []string) error {
 		return runBridge(rest)
 	case "headless":
 		return runHeadless(rest)
+	case "bookmarks":
+		return runBookmarks(rest)
 	case "monitor":
 		return runMonitor(rest)
 	case "mcp":

@@ -532,6 +532,24 @@ Env vars:
 |---|---|---|
 | `SOCIAL_LEDGER_DAEMON_URL` | http://127.0.0.1:5557 | client lookup; set to a remote URL for cross-host use |
 | `SOCIAL_LEDGER_DAEMON_DISABLE` | unset | non-empty = clients always use direct store / subprocess |
+| `SOCIAL_LEDGER_PROJECT` | `social_fetch` | per-project ledger subdir; `<base>/projects/<NAME>/ledger.db`. Default `social_fetch` is the canonical bucket. Set to a different name (e.g. `research-x`) to use a separate ledger. Pre-projects bare ledgers migrate automatically on first run. |
+
+## Local browser bookmarks
+
+`social-fetch bookmarks list` reads Chrome's local Bookmarks JSON
+and emits matching entries. Date-range filterable, multi-profile
+aware, no extension or daemon needed.
+
+```bash
+social-fetch bookmarks list --since 2026-04-01      # added since April
+social-fetch bookmarks list --folder-contains AI    # by folder name
+social-fetch bookmarks list --all-profiles -f json  # JSON, every profile
+social-fetch bookmarks profiles                     # which profiles exist
+```
+
+`--platform chrome` is today's default + only supported value.
+Future platforms (Twitter / X bookmarks, Reddit saved posts —
+server-side, account-scoped) plug in as additional values.
 
 ## Headless browser pool (anonymous JS-rendered fetches)
 

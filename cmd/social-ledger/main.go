@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -93,10 +94,99 @@ func run(args []string) error {
 	}
 }
 
+// DefaultProject is the project name used when SOCIAL_LEDGER_PROJECT
+// is unset. Picked as `social_fetch` so the default bucket is
+// self-describing for operators browsing the data dir
+// (`projects/social_fetch/ledger.db` vs an unhelpful `default`).
+const DefaultProject = "social_fetch"
+
 // dataDir resolves the per-user data directory, honoring
-// $SOCIAL_LEDGER_DIR (explicit override) and $XDG_DATA_HOME
-// (XDG default). Falls back to ~/.local/share/social-ledger.
+// $SOCIAL_LEDGER_DIR (explicit override), $SOCIAL_LEDGER_PROJECT
+// (per-project subdir), and $XDG_DATA_HOME (XDG default). Falls
+// back to ~/.local/share/social-ledger.
+//
+// Project semantics: every ledger lives under <base>/projects/<P>/.
+// SOCIAL_LEDGER_PROJECT=X picks project X; unset uses
+// `social_fetch` (DefaultProject). Operators can keep separate
+// ledgers per research context (work, personal, topic-X) without
+// juggling SOCIAL_LEDGER_DIR for each.
+//
+// One-time migration: if a bare <base>/ledger.db exists from a
+// pre-projects install, dataDir auto-moves it (and the WAL/SHM
+// side files) into projects/social_fetch/ on first resolution.
+// Idempotent — re-running after migration is a no-op since the
+// bare file no longer exists.
+//
+// Each project = a separate SQLite store. Want a daemon for
+// project X? Run `SOCIAL_LEDGER_PROJECT=X social-ledger daemon
+// start --port <unique>`. The daemon serves one project per
+// instance; multiple daemons on different ports for parallel
+// projects.
 func dataDir() (string, error) {
+	base, err := baseDataDir()
+	if err != nil {
+		return "", err
+	}
+	proj := strings.TrimSpace(os.Getenv("SOCIAL_LEDGER_PROJECT"))
+	if proj == "" {
+		proj = DefaultProject
+	}
+	target := filepath.Join(base, "projects", sanitizeProjectName(proj))
+
+	// One-shot migration of pre-projects bare layout. Only fires
+	// when the bare DB exists AND the target doesn't, so it's safe
+	// to call from every subcommand on every invocation.
+	if proj == DefaultProject {
+		if err := migrateBareLedger(base, target); err != nil {
+			// Don't block on migration failure — the user can
+			// move the file by hand. Surface to stderr so it's
+			// visible.
+			fmt.Fprintf(os.Stderr, "social-ledger: bare→project migration skipped: %v\n", err)
+		}
+	}
+	return target, nil
+}
+
+// migrateBareLedger moves <base>/ledger.db (plus -wal, -shm) into
+// <target>/ on first call. No-op when there's nothing to migrate
+// or when the target already has data.
+//
+// Why move all three side files: SQLite WAL mode writes pending
+// commits to <db>-wal, with shared-memory state in <db>-shm.
+// Leaving them behind while moving the main file would corrupt
+// the database — SQLite would re-create empty WAL/SHM next to
+// the moved main file and lose anything pending.
+func migrateBareLedger(base, target string) error {
+	bare := filepath.Join(base, "ledger.db")
+	if _, err := os.Stat(bare); err != nil {
+		return nil // nothing to migrate
+	}
+	if _, err := os.Stat(filepath.Join(target, "ledger.db")); err == nil {
+		// target already populated — leave the bare file alone so
+		// the operator can inspect / merge by hand.
+		return fmt.Errorf("bare ledger.db at %s but target %s/ledger.db already exists; not overwriting", bare, target)
+	}
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		return err
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		src := bare + suffix
+		dst := filepath.Join(target, "ledger.db"+suffix)
+		if _, err := os.Stat(src); err != nil {
+			continue // -wal / -shm may not exist; that's fine
+		}
+		if err := os.Rename(src, dst); err != nil {
+			return fmt.Errorf("rename %s → %s: %w", src, dst, err)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "social-ledger: migrated bare ledger.db → %s\n", target)
+	return nil
+}
+
+// baseDataDir is dataDir() without the project suffix — the
+// directory that holds projects/ and (for backwards compat) the
+// bare ledger.db when no project is set.
+func baseDataDir() (string, error) {
 	if d := os.Getenv("SOCIAL_LEDGER_DIR"); d != "" {
 		return d, nil
 	}
@@ -110,6 +200,32 @@ func dataDir() (string, error) {
 	return filepath.Join(home, ".local", "share", "social-ledger"), nil
 }
 
+// sanitizeProjectName accepts the project name as the operator
+// typed it but enforces filesystem safety: alnum + dash + underscore
+// only. Keeps the path predictable across OSes (no spaces, no
+// shell-metas) and avoids accidental path traversal via "../foo".
+// Stripped chars are replaced with `-`.
+func sanitizeProjectName(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '-' || r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := b.String()
+	if out == "" {
+		return "default"
+	}
+	return out
+}
+
 // addCommonFlags registers --data-dir on a FlagSet — every subcommand
 // accepts it so users can point a single invocation at an alternate
 // ledger (test fixtures, scratch ledger, etc.).
@@ -120,11 +236,23 @@ func addCommonFlags(fs *flag.FlagSet, dataDirOut *string) {
 // resolveDataDir picks the explicit --data-dir flag value when set,
 // falling back to the env-derived default. Centralized so every
 // subcommand's "where's my ledger?" logic is one line.
+//
+// Always ensures the directory exists — auto-creates on first call
+// for a fresh project so reads against an empty project don't
+// error with "unable to open database file" before the first write.
 func resolveDataDir(flagVal string) (string, error) {
-	if flagVal != "" {
-		return flagVal, nil
+	dir := flagVal
+	if dir == "" {
+		d, err := dataDir()
+		if err != nil {
+			return "", err
+		}
+		dir = d
 	}
-	return dataDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("create ledger dir %s: %w", dir, err)
+	}
+	return dir, nil
 }
 
 // usageErr is the shape callers return from cmd* functions when the
