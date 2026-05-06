@@ -24,6 +24,7 @@ func cmdRun(args []string) error {
 	flags := &upFlags{}
 	flags.attach(fs)
 	output := fs.String("output", "", "destination dir for /artifacts pulled after the run; default: skip pull")
+	stream := fs.Bool("stream", false, "emit JSONL events on stdout (session/text/artifact/done) instead of waiting for the prompt to finish")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -48,5 +49,6 @@ func cmdRun(args []string) error {
 		Name:      flags.name,
 		Env:       envMap,
 		OutputDir: *output,
+		Stream:    *stream,
 	}, prompt)
 }

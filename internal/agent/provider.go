@@ -157,6 +157,15 @@ type UpOpts struct {
 	// by Up (it's a one-shot-Run concern; the equivalent for
 	// persistent sessions is `social-agent pull <id>` on demand).
 	OutputDir string
+
+	// Stream switches Provider.Run from "print claude's response
+	// + post-run pull" to "emit JSONL events on stdout as the run
+	// progresses": session up/down, line-buffered text, artifact
+	// notifications, terminating done. Useful for long-running
+	// agent prompts where the operator (or a parent agent) wants
+	// progressive feedback. Ignored by Up. See
+	// internal/agent/streaming for the event shape.
+	Stream bool
 }
 
 // ExecOpts wires stdin/stdout/stderr from the caller through to

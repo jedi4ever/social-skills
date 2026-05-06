@@ -175,3 +175,9 @@ graph ???
 
 also workspace , for debugging ?
 recycle, session reumse
+====
+way to push content to contair to start with
+====
+pi harness
+===
+claude oauth key refresh

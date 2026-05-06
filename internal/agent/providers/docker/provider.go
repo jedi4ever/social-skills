@@ -7,6 +7,7 @@
 package docker
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,11 +18,13 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jedi4ever/social-skills/internal/agent"
 	"github.com/jedi4ever/social-skills/internal/agent/artifacts"
 	"github.com/jedi4ever/social-skills/internal/agent/harness"
+	"github.com/jedi4ever/social-skills/internal/agent/streaming"
 )
 
 // LabelKey is what the provider stamps on every container it
@@ -366,15 +369,19 @@ func (p *Provider) Exec(ctx context.Context, id string, opts agent.ExecOpts) err
 	return c.Run()
 }
 
-// Run is the one-shot path: Up + harness.InvokePrompt + (if
-// opts.OutputDir set) pull /artifacts + Down. Streams claude's
-// response straight to opts.Stdout as it arrives so the operator
-// sees output in real time.
+// Run is the one-shot path. Two modes:
 //
-// The pull always uses HTTP (via Session.ArtifactsURL) even when
-// the container was bind-mounted with a workdir on local docker.
-// Mirrors what the daytona provider will do; gives us a single
-// code path to test.
+//	default — Up + Exec(InvokePrompt) + (if OutputDir) PullAll + Down.
+//	          Claude's stdout streams to os.Stdout in real time;
+//	          artifacts are pulled post-run.
+//	stream  — Up + emit lifecycle/text/artifact events as JSONL on
+//	          stdout while the prompt runs; final Down. No
+//	          post-run PullAll — operators consume artifacts
+//	          inline as the {kind:"artifact"} events arrive.
+//
+// Both modes use HTTP for artifact access (even when the session
+// has a host-bind-mounted workdir on local docker) — keeps the
+// substrate-agnostic code path exercised every run.
 func (p *Provider) Run(ctx context.Context, opts agent.UpOpts, prompt string) error {
 	hName := opts.Harness
 	if hName == "" {
@@ -395,6 +402,9 @@ func (p *Provider) Run(ctx context.Context, opts agent.UpOpts, prompt string) er
 		defer cancel()
 		_ = p.Down(downCtx, s.ID)
 	}()
+	if opts.Stream {
+		return p.runStream(ctx, s, h, prompt)
+	}
 	if err := p.Exec(ctx, s.ID, agent.ExecOpts{
 		Cmd: h.InvokePrompt(prompt),
 		// Run is non-interactive — no TTY. Stdout/stderr stream
@@ -428,6 +438,146 @@ func (p *Provider) Run(ctx context.Context, opts agent.UpOpts, prompt string) er
 		fmt.Fprintf(os.Stderr, "pulled %d files (%s) → %s\n", count, humanBytes(bytes), opts.OutputDir)
 	}
 	return nil
+}
+
+// runStream emits JSONL events on os.Stdout while the prompt
+// runs. Three concurrent activities:
+//
+//  1. Exec runs in a goroutine, writing claude's stdout to a
+//     pipe.
+//  2. The pipe is read line-by-line on the main path; each line
+//     becomes a {kind:"text"} event.
+//  3. An artifact poller runs in another goroutine, GET'ing
+//     /artifacts/ once per second and emitting
+//     {kind:"artifact"} events for newly-seen files.
+//
+// On exec completion (pipe closes), the poller is cancelled, a
+// final scan picks up files written in the last interval, and
+// {kind:"done"} closes the stream. Lifecycle events bracket the
+// whole thing.
+func (p *Provider) runStream(ctx context.Context, s *agent.Session, h harness.Harness, prompt string) error {
+	out := streaming.NewWriter(os.Stdout)
+	_ = out.Emit(streaming.Event{Kind: "session", Status: "up", ID: s.ID})
+
+	// Artifact poller. Shares its `seen` map with the final
+	// post-exec scan so we never emit the same path@sha256 twice.
+	// Runs until pollCancel fires.
+	pollCtx, pollCancel := context.WithCancel(ctx)
+	pollDone := make(chan struct{})
+	seen := map[string]bool{}
+	var seenMu sync.Mutex
+	var artClient *artifacts.Client
+	if s.ArtifactsURL != "" {
+		artClient = &artifacts.Client{BaseURL: s.ArtifactsURL}
+		go func() {
+			defer close(pollDone)
+			pollArtifactsShared(pollCtx, artClient, out, seen, &seenMu)
+		}()
+	} else {
+		close(pollDone)
+	}
+
+	// Exec writer pipe — claude's stdout flows through this; we
+	// read line-by-line and emit text events.
+	pr, pw := io.Pipe()
+	execErrCh := make(chan error, 1)
+	go func() {
+		err := p.Exec(ctx, s.ID, agent.ExecOpts{
+			Cmd:    h.InvokePrompt(prompt),
+			Stdout: pw,
+			Stderr: os.Stderr, // operator sees stderr unfiltered for diagnostic value
+		})
+		_ = pw.Close()
+		execErrCh <- err
+	}()
+
+	// Read claude's stdout line-by-line. Each terminal line ('\n'
+	// boundary) becomes one text event. Empty lines pass through
+	// so claude's intentional formatting (paragraph breaks)
+	// survives.
+	scanner := bufio.NewScanner(pr)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024) // tolerate long lines
+	for scanner.Scan() {
+		_ = out.Emit(streaming.Event{Kind: "text", Content: scanner.Text()})
+	}
+	scanErr := scanner.Err()
+
+	// Wait for exec to finish so we know the prompt is done.
+	execErr := <-execErrCh
+
+	// Stop the poller; do a final synchronous artifacts scan to
+	// catch anything written in the last second. Reuses the
+	// poller's `seen` map so already-emitted entries don't
+	// duplicate.
+	pollCancel()
+	<-pollDone
+	if artClient != nil {
+		emitArtifactDeltaLocked(ctx, artClient, out, seen, &seenMu)
+	}
+
+	// Lifecycle close + done. Down happens in the caller's
+	// defer; we emit "down" here BEFORE that runs so consumers
+	// see the event before the container goes away.
+	_ = out.Emit(streaming.Event{Kind: "session", Status: "down", ID: s.ID})
+
+	if execErr != nil {
+		_ = out.Emit(streaming.Event{Kind: "done", ExitCode: 1, Error: execErr.Error()})
+		return nil // already emitted as event; caller doesn't need a Go error too
+	}
+	if scanErr != nil {
+		_ = out.Emit(streaming.Event{Kind: "error", Error: "scan: " + scanErr.Error()})
+	}
+	_ = out.Emit(streaming.Event{Kind: "done", ExitCode: 0})
+	return nil
+}
+
+// pollArtifactsShared hits /artifacts/ every 1s and emits an
+// event for every file not yet in seen. seen + seenMu are shared
+// with the post-exec final scan so a path@sha256 never duplicates.
+// Tracked by `path@sha256` (not just path) so a rewrite of the
+// same path with new content surfaces as a new event.
+func pollArtifactsShared(ctx context.Context, c *artifacts.Client, w *streaming.Writer, seen map[string]bool, mu *sync.Mutex) {
+	emitArtifactDeltaLocked(ctx, c, w, seen, mu)
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			emitArtifactDeltaLocked(ctx, c, w, seen, mu)
+		}
+	}
+}
+
+// emitArtifactDeltaLocked lists /artifacts and emits an event for
+// every entry not yet in seen. Updates seen in place under the
+// mutex so the poller and the final-scan caller don't race.
+func emitArtifactDeltaLocked(ctx context.Context, c *artifacts.Client, w *streaming.Writer, seen map[string]bool, mu *sync.Mutex) {
+	entries, err := c.List(ctx)
+	if err != nil {
+		// Don't spam — one error per second would be noisy.
+		// Surface as a single error event, no retry annotation.
+		_ = w.Emit(streaming.Event{Kind: "error", Error: "artifacts list: " + err.Error()})
+		return
+	}
+	for _, e := range entries {
+		key := e.Path + "@" + e.SHA256
+		mu.Lock()
+		if seen[key] {
+			mu.Unlock()
+			continue
+		}
+		seen[key] = true
+		mu.Unlock()
+		_ = w.Emit(streaming.Event{
+			Kind:   "artifact",
+			Path:   e.Path,
+			Size:   e.Size,
+			SHA256: e.SHA256,
+			Mime:   e.Mime,
+		})
+	}
 }
 
 // waitArtifactsReady polls the artifacts server's /health
