@@ -232,10 +232,10 @@ func topUpFleet(ctx context.Context, provName string, target int) error {
 	}
 	missing := target - len(have)
 	fmt.Fprintf(os.Stderr, "fleet has %d backend(s), spawning %d more to reach %d ...\n", len(have), missing, target)
-	// Default snapshot to social-skills:<this version>.
+	// Default snapshot to social-skills-browser:<this version>.
 	_, err = prov.Up(ctx, browser.UpOpts{
 		N:     missing,
-		Image: "social-skills:" + Version,
+		Image: "social-skills-browser:" + Version,
 	})
 	return err
 }

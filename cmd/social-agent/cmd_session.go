@@ -20,18 +20,21 @@ import (
 	"time"
 
 	"github.com/jedi4ever/social-skills/internal/agent"
+	daytonaprov "github.com/jedi4ever/social-skills/internal/agent/providers/daytona"
 	dockerprov "github.com/jedi4ever/social-skills/internal/agent/providers/docker"
 )
 
 // buildProvider returns the agent.Provider matching name. Lone
-// indirection point for adding "daytona" or other substrates
-// later.
+// indirection point so adding a new substrate touches one switch
+// case here.
 func buildProvider(name string) (agent.Provider, error) {
 	switch strings.ToLower(name) {
 	case "", "docker":
 		return dockerprov.New(), nil
+	case "daytona":
+		return daytonaprov.NewProvider()
 	default:
-		return nil, fmt.Errorf("unknown provider %q (today: docker)", name)
+		return nil, fmt.Errorf("unknown provider %q (today: docker | daytona)", name)
 	}
 }
 

@@ -15,7 +15,9 @@ func cmdProvider(args []string) error {
 	switch name {
 	case "docker":
 		return cmdProviderDocker(verb, rest)
+	case "daytona":
+		return cmdProviderDaytona(verb, rest)
 	default:
-		return fmt.Errorf("provider: unknown name %q (today: docker)", name)
+		return fmt.Errorf("provider: unknown name %q (today: docker | daytona)", name)
 	}
 }

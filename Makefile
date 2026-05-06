@@ -169,7 +169,7 @@ bridge-package:  ## Package the Chrome browser-bridge extension as ./dist/social
 # `docker-run` uses :latest. `docker-compose-up` is the dev shorthand —
 # use it when you want to point Claude Desktop / claude.ai at the
 # local container.
-DOCKER_IMAGE       = social-skills
+DOCKER_IMAGE       = social-skills-browser
 DOCKER_AGENT_IMAGE = social-skills-agent
 DOCKER_VERSION     = $(shell awk -F\" '/^const Version =/ {print $$2; exit}' cmd/social-fetch/main.go)
 DOCKER_LEDGER_VOL  = social-skills-ledger

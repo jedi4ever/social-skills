@@ -14,10 +14,12 @@ import (
 
 // Binaries is the set of social-skills binaries the docker images
 // bundle. Single source of truth for both image flavours
-// (social-skills:* and social-skills-agent:*) — the agent image
-// includes the same set so an in-container claude-code session can
-// shell out to social-fetch / social-ledger / social-browser.
-var Binaries = []string{"social-fetch", "social-ledger", "social-browser"}
+// (social-skills-browser:* and social-skills-agent:*) — both
+// images include the full set so an in-container claude-code
+// session can shell out to any of them, and the browser image
+// can host social-agent itself if the operator ever wants the
+// agent and pool colocated.
+var Binaries = []string{"social-fetch", "social-ledger", "social-browser", "social-agent"}
 
 // LinuxBinaries cross-compiles every entry in Binaries for
 // linux/<arch> into dist/linux-<arch>/. Mirrors the Makefile

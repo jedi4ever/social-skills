@@ -44,7 +44,7 @@ func cmdProviderDaytona(verb string, args []string) error {
 func runProviderDaytonaUp(args []string) error {
 	fs := flag.NewFlagSet("up", flag.ContinueOnError)
 	n := fs.Int("n", 1, "number of sandboxes to spin up")
-	snapshot := fs.String("snapshot", "social-skills:"+Version, "snapshot name to launch from")
+	snapshot := fs.String("snapshot", "social-skills-browser:"+Version, "snapshot name to launch from")
 	cpu := fs.Int("cpu", 2, "CPU cores per sandbox")
 	memory := fs.Int("memory", 2, "memory per sandbox in GB")
 	disk := fs.Int("disk", 3, "disk per sandbox in GB")
@@ -207,7 +207,7 @@ func runProviderDaytonaEnv(args []string) error {
 // shared build model.
 func runProviderDaytonaBuild(args []string) error {
 	fs := flag.NewFlagSet("build", flag.ContinueOnError)
-	tag := fs.String("tag", "social-skills:"+Version, "docker image tag to build")
+	tag := fs.String("tag", "social-skills-browser:"+Version, "docker image tag to build")
 	arch := fs.String("arch", "amd64", "target architecture: amd64 (Daytona) | arm64 (apple-silicon dev)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -230,7 +230,7 @@ func runProviderDaytonaBuild(args []string) error {
 		"--platform", "linux/" + *arch,
 		"-f", "Dockerfile.browser",
 		"-t", *tag,
-		"-t", "social-skills:latest",
+		"-t", "social-skills-browser:latest",
 		"--load",
 		".",
 	}
@@ -243,7 +243,7 @@ func runProviderDaytonaBuild(args []string) error {
 
 func runProviderDaytonaPush(args []string) error {
 	fs := flag.NewFlagSet("push", flag.ContinueOnError)
-	tag := fs.String("tag", "social-skills:"+Version, "docker image tag to push")
+	tag := fs.String("tag", "social-skills-browser:"+Version, "docker image tag to push")
 	name := fs.String("name", "", "snapshot name (default: --tag)")
 	cpu := fs.Int("cpu", 2, "CPU cores allocated to sandboxes")
 	memory := fs.Int("memory", 2, "memory in GB")

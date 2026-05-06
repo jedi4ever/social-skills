@@ -62,7 +62,7 @@ func (p *Provider) Up(ctx context.Context, opts browser.UpOpts) ([]browser.Backe
 	}
 	image := opts.Image
 	if image == "" {
-		return nil, fmt.Errorf("daytona up: opts.Image is required (snapshot name e.g. 'social-skills:0.14.0')")
+		return nil, fmt.Errorf("daytona up: opts.Image is required (snapshot name e.g. 'social-skills-browser:0.14.0')")
 	}
 
 	// Auto-generate one shared MCP_AUTH_TOKEN for the batch when
