@@ -121,11 +121,21 @@ docker container for different deamons
 ====
 ledger fetch autostore ?????
 =====
-daytona-cli spnins up 
-=====
 youtube summaries over mcp - too long or too much text on output
-===
 
-avoid daytonw specxidficx in social-skells fetcher
 ===
 defaulkt mem/cpu of daytona
+====
+social-researcher
+====
+namespace daytona 
+====
+social-agent
+====
+browser pool not via mcp ?
+autodetect socia-fetch browserpool on port?
+expose
+====
+social-browser also local?
+====
+cleanup bookmarks

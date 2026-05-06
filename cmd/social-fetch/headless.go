@@ -73,9 +73,17 @@ Common flags:
 Env vars:
   SOCIAL_FETCH_HEADLESS_POOL_SIZE      default for --pool
   SOCIAL_FETCH_HEADLESS_RECYCLE_AFTER  default for --recycle
-  SOCIAL_FETCH_HEADLESS_DAEMON_URL     where clients look for the daemon
-                                       (default http://127.0.0.1:5556)
+  SOCIAL_FETCH_HEADLESS_DAEMON_URL     pin clients to a specific daemon URL
+                                       (skips autodetect; default unset)
   SOCIAL_FETCH_HEADLESS_DAEMON_DISABLE non-empty = clients never use the daemon
+  SOCIAL_FETCH_HEADLESS_POOL_DISABLE   non-empty = autodetect skips :5560
+                                       (the social-browser pool) and goes
+                                       straight to :5556
+
+Autodetect (when SOCIAL_FETCH_HEADLESS_DAEMON_URL is unset):
+  1. http://127.0.0.1:5560   social-browser pool daemon (round-robin)
+  2. http://127.0.0.1:5556   single-host daemon (this binary)
+  First responder wins; falls through to in-process spawn if neither.
 
 Endpoints (when running):
   POST http://ADDR/fetch     {"url": "..."} → {"html","final_url","engine"}
