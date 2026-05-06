@@ -26,6 +26,12 @@ coverage.out
 **/.env.*
 *.local
 
+# Project MCP server config — hardcoded host paths (dist/...) and
+# operator-specific server choices. Each developer maintains their
+# own. The repo's canonical advice for setting one up lives in
+# INSTALL.md or per-feature commit messages.
+.mcp.json
+
 # Output / scratch
 /out/
 *.log
