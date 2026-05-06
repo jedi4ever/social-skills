@@ -44,7 +44,26 @@ Two conventions about the filesystem:
 Your text response (this conversation) is also returned separately on
 stdout. Use it for explanation, summary, and references to artifacts you
 produced. Don't dump file contents in the response when you've already
-written them to /artifacts.`
+written them to /artifacts.
+
+You also have an ` + "`ask_user`" + ` tool from the ` + "`ask`" + ` MCP server. It forwards a
+plain-English question to the human operator and returns their reply.
+Use it when you need information that is not in your context — credentials,
+file locations, business decisions, scope clarifications. Don't use it for
+trivial things; the operator's attention is expensive. If the tool errors
+"not available", you're running outside an MCP session — don't retry, just
+proceed with your best guess and surface the assumption in your answer.`
+
+// askMCPConfigJSON is the inline --mcp-config payload that
+// registers the in-container ask-MCP server with claude-code.
+// Always passed; the tool's handler fails cleanly when the
+// outer callback URL isn't set (CLI runs without an MCP outer).
+//
+// /usr/local/bin/social-agent is the binary path inside the
+// agent image (see Dockerfile.agent's COPY layer for
+// social-agent). ask-mcp serve speaks stdio MCP and round-trips
+// to SOCIAL_AGENT_CALLBACK_URL when invoked.
+const askMCPConfigJSON = `{"mcpServers":{"ask":{"command":"/usr/local/bin/social-agent","args":["ask-mcp","serve"]}}}`
 
 // InvokePrompt returns the argv for a one-shot prompt. The flags
 // match what `claude --help` documents:
@@ -120,6 +139,12 @@ func (ClaudeCode) EnvFromHost(host map[string]string) (map[string]string, error)
 // only the flags. `--verbose` is required when both
 // --input-format and --output-format are stream-json — without it
 // claude refuses to start.
+//
+// --mcp-config registers the in-container ask-MCP server so the
+// inner agent can call ask_user to elicit input from the outer
+// human operator. Always included; the tool's handler returns
+// a clean error when no SOCIAL_AGENT_CALLBACK_URL is set (CLI
+// runs without an MCP outer).
 func (ClaudeCode) StreamJSONCmd() []string {
 	return []string{
 		"claude",
@@ -128,6 +153,7 @@ func (ClaudeCode) StreamJSONCmd() []string {
 		"--output-format=stream-json",
 		"--verbose",
 		"--dangerously-skip-permissions",
+		"--mcp-config", askMCPConfigJSON,
 		"--append-system-prompt", artifactsSystemPrompt,
 	}
 }

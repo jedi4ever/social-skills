@@ -41,7 +41,7 @@ import (
 // Version is held in lockstep with the rest of the binaries +
 // the claude-desktop / claude-code / marketplace manifests. See
 // CLAUDE.md "Versioning".
-const Version = "0.18.0"
+const Version = "0.18.1"
 
 func main() {
 	dotenv.LoadAuto()
@@ -83,6 +83,14 @@ func run(args []string) error {
 		return cmdArtifacts(args[1:])
 	case "mcp":
 		return cmdMCP(args[1:])
+	case "ask-mcp":
+		verb := ""
+		rest := args[1:]
+		if len(rest) > 0 {
+			verb = rest[0]
+			rest = rest[1:]
+		}
+		return cmdAskMCP(verb, rest)
 	case "version", "--version", "-v":
 		fmt.Println("social-agent", Version)
 		return nil

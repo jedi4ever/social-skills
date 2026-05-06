@@ -25,6 +25,7 @@ import (
 
 	"github.com/jedi4ever/social-skills/internal/agent"
 	"github.com/jedi4ever/social-skills/internal/agent/artifacts"
+	"github.com/jedi4ever/social-skills/internal/agent/elicitcb"
 	"github.com/jedi4ever/social-skills/internal/agent/harness"
 	dockerprov "github.com/jedi4ever/social-skills/internal/agent/providers/docker"
 	"github.com/jedi4ever/social-skills/internal/agent/streaming"
@@ -261,6 +262,58 @@ func runStreaming(ctx context.Context, srv *server.MCPServer, prov agent.Provide
 		runErr      string
 	)
 
+	// Start the elicitation callback server. The inner claude's
+	// ask_user tool calls back to this URL when it wants the
+	// outer Claude Code's user to answer a question. Loopback-
+	// only + bearer-token-gated; lifetime = this run.
+	cb, err := elicitcb.Start(func(elicitCtx context.Context, question string) (string, bool, error) {
+		req := mcpgo.ElicitationRequest{
+			Request: mcpgo.Request{Method: string(mcpgo.MethodElicitationCreate)},
+			Params: mcpgo.ElicitationParams{
+				Message: question,
+				RequestedSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"answer": map[string]any{
+							"type":        "string",
+							"description": "Your reply to the inner agent's question.",
+						},
+					},
+					"required": []string{"answer"},
+				},
+			},
+		}
+		result, err := srv.RequestElicitation(elicitCtx, req)
+		if err != nil {
+			return "", false, err
+		}
+		if result.Action != "accept" {
+			return "", false, nil
+		}
+		// Content is map[string]any; extract the answer field.
+		if cm, ok := result.Content.(map[string]any); ok {
+			if v, ok := cm["answer"].(string); ok {
+				return v, true, nil
+			}
+		}
+		return "", true, nil // accepted but blank
+	})
+	if err != nil {
+		return mcpgo.NewToolResultError("elicitcb start: " + err.Error()), nil
+	}
+	defer func() { _ = cb.Close() }()
+
+	// Merge the callback URL + token into the env passed to the
+	// container. The docker provider's rewriteLoopbackURL turns
+	// 127.0.0.1 into host.docker.internal so the container can
+	// reach back; the token is opaque and travels verbatim.
+	envWithCb := map[string]string{}
+	for k, v := range args.Env {
+		envWithCb[k] = v
+	}
+	envWithCb["SOCIAL_AGENT_CALLBACK_URL"] = cb.URL()
+	envWithCb["SOCIAL_AGENT_CALLBACK_TOKEN"] = cb.Token()
+
 	handler := func(e streaming.Event) {
 		mu.Lock()
 		progress++
@@ -299,7 +352,7 @@ func runStreaming(ctx context.Context, srv *server.MCPServer, prov agent.Provide
 		Image:         image,
 		Harness:       hName,
 		Workdir:       args.Workdir,
-		Env:           args.Env,
+		Env:           envWithCb,
 		Stream:        true,
 		StreamHandler: handler,
 	}, args.Prompt); err != nil {
