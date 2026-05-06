@@ -31,13 +31,13 @@ if [ -n "${TS_AUTHKEY:-}" ]; then
     done
 
     # Hostname: research-<short-container-id> by default, so a busy
-    # operator can tell their tailnet entries apart. The --ephemeral
-    # flag tells the coordinator to auto-prune the node ~5 min after
-    # disconnect, so the container being --rm'd doesn't leave a
-    # stale entry behind.
+    # operator can tell their tailnet entries apart. Ephemerality is
+    # carried by the auth key itself (mark "Ephemeral" in the admin
+    # UI when generating it) — older tailscale CLIs don't accept a
+    # --ephemeral flag, so we don't pass one. The coordinator
+    # auto-prunes the node ~5 min after disconnect.
     if ! tailscale --socket=/tmp/tailscaled.sock up \
         --authkey="$TS_AUTHKEY" \
-        --ephemeral \
         --hostname="research-$(hostname)" \
         --reset; then
         echo "researcher-entrypoint: tailscale up failed — continuing without tailnet" >&2
