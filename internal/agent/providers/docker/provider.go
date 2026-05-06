@@ -73,8 +73,12 @@ func (p *Provider) Up(ctx context.Context, opts agent.UpOpts) (*agent.Session, e
 	// Compose the docker run argv. -d keeps the container in the
 	// background; --label tags it as ours; --rm is NOT set so
 	// crashed containers leave a corpse the operator can `docker
-	// logs` after the fact.
+	// logs` after the fact. --add-host=host.docker.internal:host-gateway
+	// makes the docker-on-macOS magic name resolvable on Linux too,
+	// so env values like SOCIAL_FETCH_HEADLESS_DAEMON_URL=
+	// http://host.docker.internal:5560 work the same on every host.
 	args := []string{"run", "-d",
+		"--add-host", "host.docker.internal:host-gateway",
 		"--label", LabelKey + "=true",
 		"--label", LabelKey + "-harness=" + hName,
 		"--label", LabelKey + "-image=" + image,
@@ -104,7 +108,14 @@ func (p *Provider) Up(ctx context.Context, opts agent.UpOpts) (*agent.Session, e
 		envForContainer["CLAUDE_OAUTH_CREDENTIALS"] = opts.CredentialsBlob
 	}
 	for k, v := range envForContainer {
-		args = append(args, "-e", k+"="+v)
+		// Rewrite loopback URLs to host.docker.internal so values
+		// like SOCIAL_FETCH_HEADLESS_DAEMON_URL=http://127.0.0.1:5560
+		// — fine on the host, wrong inside a container — Just
+		// Work without the operator having to remember the magic
+		// hostname. We pair this with the --add-host above so the
+		// rewrite resolves on Linux + macOS alike. Only URL-shaped
+		// values get rewritten; non-URL values pass through unchanged.
+		args = append(args, "-e", k+"="+rewriteLoopbackURL(v))
 	}
 
 	// Optional caller-supplied labels.
@@ -417,6 +428,41 @@ func (p *Provider) inspect(ctx context.Context, idOrName string) (*agent.Session
 		State:    entry.State.Status,
 		Labels:   entry.Config.Labels,
 	}, nil
+}
+
+// rewriteLoopbackURL swaps host-loopback names (127.0.0.1,
+// 0.0.0.0, localhost) inside `http://`-shape URLs with
+// `host.docker.internal`. The container's own loopback is its
+// own; reaching the host's loopback requires the magic
+// host.docker.internal name (paired with --add-host on the docker
+// run argv).
+//
+// Non-URL values pass through unchanged so plain string env vars
+// (FOO=bar) aren't mangled by an over-eager regex.
+func rewriteLoopbackURL(v string) string {
+	// Skip cheaply when we're sure there's nothing to rewrite.
+	if !strings.Contains(v, "://") {
+		return v
+	}
+	// Only rewrite the host portion. The same scheme + path stays
+	// intact. We do dumb string-replace on the few well-known
+	// loopback substrings rather than url.Parse + Reassemble —
+	// less surface for parser drift, and the substring forms are
+	// unambiguous when bracketed by `://` and `:` / `/`.
+	for _, loopback := range []string{
+		"://127.0.0.1:",
+		"://127.0.0.1/",
+		"://localhost:",
+		"://localhost/",
+		"://0.0.0.0:",
+		"://0.0.0.0/",
+	} {
+		want := strings.Replace(loopback, "127.0.0.1", "host.docker.internal", 1)
+		want = strings.Replace(want, "localhost", "host.docker.internal", 1)
+		want = strings.Replace(want, "0.0.0.0", "host.docker.internal", 1)
+		v = strings.ReplaceAll(v, loopback, want)
+	}
+	return v
 }
 
 // _ keeps io imported — used by the ExecOpts streaming docs above

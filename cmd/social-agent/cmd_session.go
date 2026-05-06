@@ -51,6 +51,7 @@ type upFlags struct {
 	harness  string
 	workdir  string
 	name     string
+	env      envList // repeated --env KEY=VAL
 }
 
 func (u *upFlags) attach(fs *flag.FlagSet) {
@@ -59,6 +60,7 @@ func (u *upFlags) attach(fs *flag.FlagSet) {
 	fs.StringVar(&u.harness, "harness", "claude-code", "coding-agent CLI to run inside")
 	fs.StringVar(&u.workdir, "workdir", "", "host path to bind-mount at /workspace (default: no mount)")
 	fs.StringVar(&u.name, "name", "", "explicit container name (idempotent up)")
+	fs.Var(&u.env, "env", "set env var inside the container (KEY=VAL); may repeat")
 }
 
 // resolveImage applies the default-from-Version when --image was not
@@ -71,6 +73,37 @@ func (u *upFlags) resolveImage() string {
 	return "social-skills-agent:" + Version
 }
 
+// resolveEnv parses the --env KEY=VAL pairs into the map shape
+// agent.UpOpts wants. Empty pairs are skipped silently; malformed
+// entries (no `=`) return an error so the operator sees the typo
+// before the container starts and the env var goes missing.
+func (u *upFlags) resolveEnv() (map[string]string, error) {
+	if len(u.env) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(u.env))
+	for _, kv := range u.env {
+		i := strings.IndexByte(kv, '=')
+		if i <= 0 {
+			return nil, fmt.Errorf("--env %q: expected KEY=VAL", kv)
+		}
+		out[kv[:i]] = kv[i+1:]
+	}
+	return out, nil
+}
+
+// envList is a flag.Value that collects repeated --env occurrences
+// into a slice. Default flag.StringVar would let only the last
+// instance win, which is wrong for multi-env. The standard pattern
+// for "may repeat" string flags in stdlib `flag`.
+type envList []string
+
+func (e *envList) String() string { return strings.Join(*e, ",") }
+func (e *envList) Set(v string) error {
+	*e = append(*e, v)
+	return nil
+}
+
 // ----- up -----
 
 func cmdUp(args []string) error {
@@ -78,6 +111,10 @@ func cmdUp(args []string) error {
 	flags := &upFlags{}
 	flags.attach(fs)
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	envMap, err := flags.resolveEnv()
+	if err != nil {
 		return err
 	}
 	prov, err := buildProvider(flags.provider)
@@ -91,6 +128,7 @@ func cmdUp(args []string) error {
 		Harness: flags.harness,
 		Workdir: flags.workdir,
 		Name:    flags.name,
+		Env:     envMap,
 	})
 	if err != nil {
 		return err
