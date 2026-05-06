@@ -1,0 +1,101 @@
+# syntax=docker/dockerfile:1.7
+#
+# social-skills-agent — sandboxed coding-agent runner. Hosts a
+# Claude Code (default harness) session inside a container, with the
+# social-skills CLI binaries (social-fetch / social-ledger /
+# social-browser) pre-installed so the agent can shell out to them.
+#
+# Operator runs `social-agent run "prompt"` on the host; the
+# `social-agent` binary docker-runs this image, claude-code answers
+# the prompt, output streams back, container is removed. For a
+# persistent session, `social-agent up` keeps the container alive
+# (sleep infinity) and `social-agent exec` enters it.
+#
+# The base + flag set is informed by ~/dev/dclaude/src/assets/docker/
+# Dockerfile.base — same node:22-slim foundation, similar apt
+# package set, similar entrypoint shape. We don't reuse dclaude's
+# image directly because we want the social-skills binaries
+# pre-installed and we have a different lifecycle script.
+
+FROM node:22-slim
+
+# TARGETARCH: set by docker buildx --platform; selects which
+# dist/linux-<arch>/ tree to copy the social-skills binaries from.
+# Same model the browser image uses (see Dockerfile.browser).
+ARG TARGETARCH
+
+# Tools the in-container agent commonly needs:
+#   git           — clone / inspect repos
+#   gh            — GitHub CLI for PRs / issues
+#   ripgrep, jq   — search / data wrangling
+#   curl          — HEALTHCHECK + scratch HTTP probes
+#   ca-certificates — TLS trust for HTTPS calls
+#   dumb-init     — PID 1 reaper, clean SIGTERM propagation
+#   bash          — interactive PTY shell
+#   sudo          — only used by `agent shell`; the entrypoint runs
+#                   as the non-root `agent` user but a sudoers entry
+#                   lets the operator escalate inside if they need
+#                   to apt-install something for a one-off task
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      git \
+      gh \
+      ripgrep \
+      jq \
+      curl \
+      ca-certificates \
+      dumb-init \
+      bash \
+      sudo \
+ && rm -rf /var/lib/apt/lists/*
+
+# Claude Code itself. npm installs into /usr/local/lib/node_modules
+# so it's available on PATH as `claude`. Pinning a version is
+# possible later via --build-arg CLAUDE_CODE_VERSION, but for now
+# we track @latest because Anthropic's release cadence is fast and
+# pinning would mean stale-by-default.
+RUN npm install --no-audit --no-fund -g @anthropic-ai/claude-code
+
+# Non-root user for the runtime. uid/gid 1000 matches the typical
+# host-user mapping when the operator bind-mounts $PWD into
+# /workspace. node:22-slim ships a default `node` user at uid 1000
+# — drop it first so our useradd can claim that uid. No password;
+# sudoers entry lets the user escalate inside the container without
+# one.
+RUN userdel -r node 2>/dev/null || true \
+ && useradd -m -u 1000 -U -s /bin/bash agent \
+ && echo "agent ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/agent \
+ && chmod 0440 /etc/sudoers.d/agent
+
+# Pre-built social-skills binaries — same set the browser image
+# bundles, copied in from dist/linux-${TARGETARCH}/. The agent's
+# in-container claude-code can shell out to these directly: e.g.
+# `social-fetch fetch <url>` to grab a page (routed through the
+# operator's social-browser daemon if SOCIAL_FETCH_HEADLESS_DAEMON_URL
+# is set in env, otherwise returns a clean error).
+COPY dist/linux-${TARGETARCH}/social-fetch   /usr/local/bin/social-fetch
+COPY dist/linux-${TARGETARCH}/social-ledger  /usr/local/bin/social-ledger
+COPY dist/linux-${TARGETARCH}/social-browser /usr/local/bin/social-browser
+COPY dist/linux-${TARGETARCH}/social-agent   /usr/local/bin/social-agent
+COPY docker-agent-entrypoint.sh /usr/local/bin/docker-agent-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-agent-entrypoint.sh \
+              /usr/local/bin/social-fetch \
+              /usr/local/bin/social-ledger \
+              /usr/local/bin/social-browser \
+              /usr/local/bin/social-agent
+
+# /workspace is the conventional bind-mount target. Empty by
+# default — `social-agent up --workdir <path>` mounts the host
+# directory here at runtime. With no --workdir, /workspace stays
+# empty and the agent has no host filesystem access. Owned by the
+# agent user so claude-code can write without chown gymnastics.
+RUN mkdir -p /workspace && chown agent:agent /workspace
+
+USER agent
+WORKDIR /workspace
+
+# Default: keep the container alive. `social-agent run` overrides
+# CMD with `run "<prompt>"` for the one-shot path; persistent
+# sessions get the default and `social-agent exec` enters them.
+ENTRYPOINT ["/usr/bin/dumb-init", "--", "/usr/local/bin/docker-agent-entrypoint.sh"]
+CMD ["sleep"]

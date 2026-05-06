@@ -13,11 +13,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/jedi4ever/social-skills/internal/browser"
 	dprovider "github.com/jedi4ever/social-skills/internal/browser/providers/daytona"
+	"github.com/jedi4ever/social-skills/internal/build"
 )
 
 func cmdProviderDaytona(verb string, args []string) error {
@@ -218,15 +218,17 @@ func runProviderDaytonaBuild(args []string) error {
 
 	// Cross-compile linux/<arch> binaries to dist/linux-<arch>/.
 	// The Dockerfile reads from there via TARGETARCH.
-	if err := buildLinuxBinaries(*arch); err != nil {
+	if err := build.LinuxBinaries(*arch); err != nil {
 		return fmt.Errorf("cross-compile linux/%s binaries: %w", *arch, err)
 	}
 
 	// docker buildx build --platform linux/<arch> --load — single
 	// platform so --load works (multi-platform images can only be
-	// --pushed to a registry).
+	// --pushed to a registry). -f Dockerfile.browser is explicit
+	// because the agent flavour lives next to it as Dockerfile.agent.
 	cmdArgs := []string{"buildx", "build",
 		"--platform", "linux/" + *arch,
+		"-f", "Dockerfile.browser",
 		"-t", *tag,
 		"-t", "social-skills:latest",
 		"--load",
@@ -237,45 +239,6 @@ func runProviderDaytonaBuild(args []string) error {
 	cmd.Stderr = os.Stderr
 	cmd.Env = ensureDockerHost(os.Environ())
 	return cmd.Run()
-}
-
-// buildLinuxBinaries cross-compiles social-fetch / social-ledger /
-// social-browser for linux/<arch> into dist/linux-<arch>/. Mirrors the
-// Makefile linux-binaries-<arch> target so callers that don't have
-// `make` on PATH (or that prefer one-command flows) still produce
-// the same artifact tree.
-func buildLinuxBinaries(arch string) error {
-	binaries := []string{"social-fetch", "social-ledger", "social-browser"}
-	outDir := filepath.Join("dist", "linux-"+arch)
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return err
-	}
-	for _, bin := range binaries {
-		target := filepath.Join(outDir, bin)
-		fmt.Fprintf(os.Stderr, "  cross-compiling linux/%s/%s\n", arch, bin)
-		c := exec.Command("go", "build",
-			"-ldflags=-s -w",
-			"-trimpath",
-			"-o", target,
-			"./cmd/"+bin,
-		)
-		c.Stdout = os.Stderr
-		c.Stderr = os.Stderr
-		c.Env = append(os.Environ(),
-			"GOOS=linux",
-			"GOARCH="+arch,
-			// Cross-compile defaults to CGO_ENABLED=0 unless a
-			// C toolchain is configured for the target. Force it
-			// off so the build is reproducible across hosts and
-			// the resulting binary is statically linked, matching
-			// the previous in-docker builder behaviour.
-			"CGO_ENABLED=0",
-		)
-		if err := c.Run(); err != nil {
-			return fmt.Errorf("build %s: %w", bin, err)
-		}
-	}
-	return nil
 }
 
 func runProviderDaytonaPush(args []string) error {

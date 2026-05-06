@@ -4,6 +4,7 @@
 BIN                     := ./dist/social-fetch
 LEDGER_CMD_BIN          := ./dist/social-ledger
 BROWSER_CMD_BIN         := ./dist/social-browser
+AGENT_CMD_BIN           := ./dist/social-agent
 SKILL_BIN               := ./skills/social-fetch/scripts/social-fetch
 SKILL_LEDGER_BIN        := ./skills/social-fetch/scripts/social-ledger
 LEDGER_SKILL_DIR        := ./skills/social-ledger
@@ -28,6 +29,7 @@ SKILL_INSTALL_DIR ?= $(HOME)/.claude/skills/social-fetch
         ledger-build ledger-test \
         ledger-skill-build ledger-skill-install ledger-skill-clean ledger-skill-package \
         docker-build docker-build-amd64 docker-build-arm64 \
+        agent-build agent-build-amd64 agent-build-arm64 \
         linux-binaries linux-binaries-amd64 linux-binaries-arm64 \
         docker-run docker-compose-up docker-compose-down docker-shell
 
@@ -63,6 +65,7 @@ $(SKILL_BIN): $(SKILL_DEPS)
 	go build $(GO_BUILD_FLAGS) -o $(BIN) ./cmd/social-fetch
 	go build $(GO_BUILD_FLAGS) -o $(LEDGER_CMD_BIN) ./cmd/social-ledger
 	go build $(GO_BUILD_FLAGS) -o $(BROWSER_CMD_BIN) ./cmd/social-browser
+	go build $(GO_BUILD_FLAGS) -o $(AGENT_CMD_BIN) ./cmd/social-agent
 	cp $(BIN) $(SKILL_BIN)
 	cp $(LEDGER_CMD_BIN) $(SKILL_LEDGER_BIN)
 
@@ -166,16 +169,20 @@ bridge-package:  ## Package the Chrome browser-bridge extension as ./dist/social
 # `docker-run` uses :latest. `docker-compose-up` is the dev shorthand —
 # use it when you want to point Claude Desktop / claude.ai at the
 # local container.
-DOCKER_IMAGE     = social-skills
-DOCKER_VERSION   = $(shell awk -F\" '/^const Version =/ {print $$2; exit}' cmd/social-fetch/main.go)
-DOCKER_LEDGER_VOL = social-skills-ledger
+DOCKER_IMAGE       = social-skills
+DOCKER_AGENT_IMAGE = social-skills-agent
+DOCKER_VERSION     = $(shell awk -F\" '/^const Version =/ {print $$2; exit}' cmd/social-fetch/main.go)
+DOCKER_LEDGER_VOL  = social-skills-ledger
 
 # Cross-compile artifacts. Per-arch dirs so we can build both in
 # parallel without clobbering. Listed in their own variable so the
-# `docker-build-<arch>` rules and the daemon's
-# `provider daytona build` Go path stay in sync about WHERE the
-# binaries land.
-LINUX_BINS              := social-fetch social-ledger social-browser
+# `docker-build-<arch>` rules and the per-binary
+# `provider <name> build` Go paths stay in sync about WHERE the
+# binaries land. Same set bundled into both image flavours
+# (browser + agent) so the agent's claude-code can shell out to
+# social-fetch / social-ledger / social-browser without a second
+# install.
+LINUX_BINS              := social-fetch social-ledger social-browser social-agent
 LINUX_BIN_DIR_AMD64     := dist/linux-amd64
 LINUX_BIN_DIR_ARM64     := dist/linux-arm64
 LINUX_BINS_AMD64        := $(addprefix $(LINUX_BIN_DIR_AMD64)/,$(LINUX_BINS))
@@ -195,16 +202,20 @@ linux-binaries-amd64: $(LINUX_BINS_AMD64)  ## Cross-compile linux/amd64 binaries
 linux-binaries-arm64: $(LINUX_BINS_ARM64)  ## Cross-compile linux/arm64 binaries (apple-silicon local docker)
 linux-binaries: linux-binaries-amd64 linux-binaries-arm64  ## Both archs
 
-# `docker buildx` needed for --platform + --load. Plain `docker build`
-# would also work but buildx is cleaner about cross-arch context.
+# ----- browser image (chromium pool) -----
+# `docker buildx` needed for --platform + --load. -f Dockerfile.browser
+# is explicit because the agent flavour lives next to it as
+# Dockerfile.agent.
 docker-build-amd64: linux-binaries-amd64  ## Build social-skills:<version> for linux/amd64 (Daytona-bound)
 	docker buildx build --platform linux/amd64 \
+	  -f Dockerfile.browser \
 	  -t $(DOCKER_IMAGE):$(DOCKER_VERSION) \
 	  -t $(DOCKER_IMAGE):latest \
 	  --load .
 
 docker-build-arm64: linux-binaries-arm64  ## Build social-skills:<version> for linux/arm64 (apple-silicon dev)
 	docker buildx build --platform linux/arm64 \
+	  -f Dockerfile.browser \
 	  -t $(DOCKER_IMAGE):$(DOCKER_VERSION) \
 	  -t $(DOCKER_IMAGE):latest \
 	  --load .
@@ -215,11 +226,39 @@ docker-build-arm64: linux-binaries-arm64  ## Build social-skills:<version> for l
 # for unknown CI runners.
 DOCKER_HOST_ARCH := $(shell uname -m)
 ifeq ($(DOCKER_HOST_ARCH),arm64)
-docker-build: docker-build-arm64  ## Build social-skills container for the host's native arch
+docker-build: docker-build-arm64  ## Build social-skills (browser) container for the host's native arch
 else ifeq ($(DOCKER_HOST_ARCH),aarch64)
 docker-build: docker-build-arm64
 else
 docker-build: docker-build-amd64
+endif
+
+# ----- agent image (claude-code) -----
+# Same cross-compile inputs as the browser image — the binary set is
+# identical (the agent bundles social-fetch / social-ledger /
+# social-browser so an in-container claude-code can shell out to
+# them). Different runtime base (node:22-slim) + different entrypoint
+# script (docker-agent-entrypoint.sh).
+agent-build-amd64: linux-binaries-amd64  ## Build social-skills-agent:<version> for linux/amd64
+	docker buildx build --platform linux/amd64 \
+	  -f Dockerfile.agent \
+	  -t $(DOCKER_AGENT_IMAGE):$(DOCKER_VERSION) \
+	  -t $(DOCKER_AGENT_IMAGE):latest \
+	  --load .
+
+agent-build-arm64: linux-binaries-arm64  ## Build social-skills-agent:<version> for linux/arm64
+	docker buildx build --platform linux/arm64 \
+	  -f Dockerfile.agent \
+	  -t $(DOCKER_AGENT_IMAGE):$(DOCKER_VERSION) \
+	  -t $(DOCKER_AGENT_IMAGE):latest \
+	  --load .
+
+ifeq ($(DOCKER_HOST_ARCH),arm64)
+agent-build: agent-build-arm64  ## Build social-skills-agent for the host's native arch
+else ifeq ($(DOCKER_HOST_ARCH),aarch64)
+agent-build: agent-build-arm64
+else
+agent-build: agent-build-amd64
 endif
 
 docker-run:  ## Run the container with all three daemons exposed and a named volume for state
@@ -403,6 +442,7 @@ check:  ## Run the same checks CI runs (gofmt + vet + test + plugin SKILL.md syn
 	bin_ver=$$(awk -F\" '/^const Version =/ {print $$2; exit}' cmd/social-fetch/main.go); \
 	ledger_ver=$$(awk -F\" '/^const Version =/ {print $$2; exit}' cmd/social-ledger/main.go); \
 	browser_ver=$$(awk -F\" '/^const Version =/ {print $$2; exit}' cmd/social-browser/main.go); \
+	agent_ver=$$(awk -F\" '/^const Version =/ {print $$2; exit}' cmd/social-agent/main.go); \
 	desktop_ver=$$(awk -F\" '/^  "version":/ {print $$4; exit}' extensions/claude-desktop/manifest.json); \
 	plugin_ver=$$(awk -F\" '/^  "version":/ {print $$4; exit}' extensions/claude-code/.claude-plugin/plugin.json); \
 	market_ver=$$(awk -F\" '/^  "version":/ {print $$4; exit}' .claude-plugin/marketplace.json); \
@@ -410,11 +450,12 @@ check:  ## Run the same checks CI runs (gofmt + vet + test + plugin SKILL.md syn
 	[ -n "$$bin_ver" ] || mismatch="$$mismatch  - cmd/social-fetch/main.go: Version constant missing\n"; \
 	[ "$$ledger_ver" = "$$bin_ver" ] || mismatch="$$mismatch  - cmd/social-ledger/main.go: $$ledger_ver (want $$bin_ver)\n"; \
 	[ "$$browser_ver" = "$$bin_ver" ] || mismatch="$$mismatch  - cmd/social-browser/main.go: $$browser_ver (want $$bin_ver)\n"; \
+	[ "$$agent_ver" = "$$bin_ver" ] || mismatch="$$mismatch  - cmd/social-agent/main.go: $$agent_ver (want $$bin_ver)\n"; \
 	[ "$$desktop_ver" = "$$bin_ver" ] || mismatch="$$mismatch  - extensions/claude-desktop/manifest.json: $$desktop_ver (want $$bin_ver)\n"; \
 	[ "$$plugin_ver" = "$$bin_ver" ] || mismatch="$$mismatch  - extensions/claude-code/.claude-plugin/plugin.json: $$plugin_ver (want $$bin_ver)\n"; \
 	[ "$$market_ver" = "$$bin_ver" ] || mismatch="$$mismatch  - .claude-plugin/marketplace.json: $$market_ver (want $$bin_ver)\n"; \
 	if [ -n "$$mismatch" ]; then \
-		echo "::error::version lockstep violation — these six must all match $$bin_ver:"; \
+		echo "::error::version lockstep violation — these seven must all match $$bin_ver:"; \
 		printf "$$mismatch"; \
 		echo "  see CLAUDE.md \"Versioning\" — bump all together"; \
 		exit 1; \
