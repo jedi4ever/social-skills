@@ -40,7 +40,7 @@ import (
 // Version is held in lockstep with the rest of the binaries +
 // the claude-desktop / claude-code / marketplace manifests.
 // See CLAUDE.md "Versioning".
-const Version = "0.23.1"
+const Version = "0.24.0"
 
 func main() {
 	dotenv.LoadAuto()
@@ -139,51 +139,38 @@ SECURITY
   --no-docker-sock for stricter --stdio sessions.
 
 TAILSCALE (alternative to host.docker.internal)
-  The researcher image ships the tailscale binaries. Useful when:
-
-    - Running researcher on a remote host where host.docker.internal
-      doesn't bridge to your laptop (Daytona, a different machine).
-    - Reaching MCP servers (or anything else) on your tailnet by
-      tailnet-DNS name instead of an IP that varies per setup.
+  The researcher image ships the tailscale binaries AND auto-runs
+  `+"`tailscale up`"+` on container start when TS_AUTHKEY is set. Useful
+  when running researcher on a remote host or Daytona where
+  host.docker.internal doesn't bridge to your laptop.
 
   Setup (once): grab a pre-auth key from
     https://login.tailscale.com/admin/settings/keys
-  Tick "Ephemeral" when you create it — researcher containers come
-  and go, so each tailscale-up registers a fresh device; ephemeral
-  keys + the --ephemeral flag tell Tailscale to auto-prune the node
-  ~5 min after disconnect, so your tailnet doesn't fill with dead
-  research-* entries. Reusable + tag it (e.g. tag:research) so the
-  same key works across many runs.
+  Tick "Ephemeral" + "Reusable" when you create it. Ephemeral so
+  short-lived containers don't fill your tailnet with dead nodes
+  (auto-pruned ~5 min after disconnect). Reusable so the same key
+  works across many runs.
 
-  Add the key to your shell or .env as TS_AUTHKEY=tskey-auth-...;
-  PassthroughKeys forwards it into the container automatically.
+  Add to .env:
+    TS_AUTHKEY=tskey-auth-...
+    HOST_TAILSCALE_NAME=mac          # your laptop's tailnet name
 
-  Inside the container, bring tailscale up in userspace mode (no
-  NET_ADMIN / /dev/net/tun needed). The default tailscaled socket
-  path /var/run/tailscale/ doesn't exist + isn't writable for the
-  non-root agent user — we point both processes at /tmp instead.
+  PassthroughKeys forwards both into every container automatically.
 
-    tailscaled \
-      --tun=userspace-networking \
-      --socket=/tmp/tailscaled.sock \
-      --state=/tmp/tailscaled.state &
-    tailscale --socket=/tmp/tailscaled.sock up \
-      --authkey="$TS_AUTHKEY" \
-      --ephemeral \
-      --hostname=research-$(hostname)
-    tailscale --socket=/tmp/tailscaled.sock status
+  Then just:
+    social-researcher run --claude
+  And inside the container, tailscale is already up — `+"`tailscale status`"+`
+  (no --socket needed; TS_SOCKET is exported by the
+  entrypoint) shows your tailnet peers. With HOST_TAILSCALE_NAME
+  set, the inner claude's MCP URLs default to
+  http://${HOST_TAILSCALE_NAME}:5562/mcp and :5557/mcp instead of
+  host.docker.internal — so the chain works even when the container
+  is on a different machine than the MCP servers.
 
-  Then reach a host on your tailnet by name:
-    curl http://laptop.tailnet.ts.net:5562/mcp
-
-  Or point the researcher's --agent-mcp-url / --ledger-mcp-url at the
-  tailnet hostnames before exec'ing into the container so claude uses
-  them directly.
-
-  Notes: in userspace mode, outbound to tailnet hosts works
-  transparently. For inbound (other tailnet hosts reaching the
-  container), use `+"`tailscale serve`"+` (also userspace-mode-friendly).
-  Auth keys are single-use unless you mark them reusable in the admin UI.
+  Notes: userspace mode (no NET_ADMIN, no /dev/net/tun) — outbound
+  to tailnet works transparently. For inbound traffic, use
+  `+"`tailscale serve`"+`. Set TS_AUTHKEY="" to disable the auto-up
+  per-run.
 
 EXAMPLES
   # Plain bash shell, repo at /workspace

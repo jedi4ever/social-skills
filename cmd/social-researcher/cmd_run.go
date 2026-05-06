@@ -57,25 +57,32 @@ func cmdRun(args []string) error {
 	//
 	//   1. Explicit --*-mcp-url flag wins.
 	//   2. Else, $SOCIAL_{AGENT,LEDGER}_MCP_URL env wins.
-	//   3. Else, the canonical localhost ports (5562 / 5557) at
+	//   3. Else, when $HOST_TAILSCALE_NAME is set the host portion uses
+	//      the tailnet hostname (so the inner container reaches the
+	//      operator's laptop via tailscale DNS instead of
+	//      host.docker.internal — works across machines).
+	//   4. Else, the canonical localhost ports (5562 / 5557) at
 	//      host.docker.internal — what `social-{agent,ledger} mcp --http`
-	//      defaults to. Operators only override when they've moved the
-	//      servers to a different host or port.
+	//      defaults to.
 	//
 	// --stdio overrides everything — wipes both URLs so the inner claude
-	// falls back to spawning the binaries inside the container. Useful
-	// when no host HTTP servers exist (e.g. quick smoke test).
+	// falls back to spawning the binaries inside the container.
+	hostName := strings.TrimSpace(os.Getenv("HOST_TAILSCALE_NAME"))
+	defaultHost := "host.docker.internal"
+	if hostName != "" {
+		defaultHost = hostName
+	}
 	if *agentMCPURL == "" {
 		*agentMCPURL = strings.TrimSpace(os.Getenv("SOCIAL_AGENT_MCP_URL"))
 	}
 	if *agentMCPURL == "" {
-		*agentMCPURL = "http://host.docker.internal:5562/mcp"
+		*agentMCPURL = "http://" + defaultHost + ":5562/mcp"
 	}
 	if *ledgerMCPURL == "" {
 		*ledgerMCPURL = strings.TrimSpace(os.Getenv("SOCIAL_LEDGER_MCP_URL"))
 	}
 	if *ledgerMCPURL == "" {
-		*ledgerMCPURL = "http://host.docker.internal:5557/mcp"
+		*ledgerMCPURL = "http://" + defaultHost + ":5557/mcp"
 	}
 	if *stdio {
 		*agentMCPURL = ""

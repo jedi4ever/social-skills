@@ -85,6 +85,15 @@ var PassthroughKeys = []string{
 	// short-lived recommended.
 	"TS_AUTHKEY",
 
+	// HOST_TAILSCALE_NAME — operator's laptop hostname on the
+	// tailnet (e.g. "mac" or "mac.your-tailnet.ts.net"). When set,
+	// the social-researcher binary uses it as the host portion of
+	// the default --agent-mcp-url / --ledger-mcp-url so the inner
+	// claude reaches the host MCP servers via tailnet DNS instead
+	// of host.docker.internal. Operator sets it once in .env;
+	// PassthroughKeys forwards to every container.
+	"HOST_TAILSCALE_NAME",
+
 	// Observability — when set the in-container social-fetch
 	// emits OTel traces; useful for debugging agent runs.
 	"OTEL_EXPORTER_OTLP_ENDPOINT",
