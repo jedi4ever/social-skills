@@ -64,15 +64,15 @@ func New() *Fetcher {
 }
 
 // defaultChain is the order the article fetcher tries when no env
-// override is set. Headless first: when the `social-fetch headless
-// start` daemon is running, fetches go through a warm browser pool
-// (~3s end-to-end) and JS-rendered SPAs / soft bot challenges
-// resolve cleanly; when the daemon is NOT running, the headless
-// transport falls back to in-process Chromium (~5-6s including
-// cold start). HTTP is the cheap fallback for plain static pages
-// when headless is unavailable; bridge handles the auth-required
-// case (CF challenges with the user's session); jina is the
-// remote-service catch-all.
+// override is set. Headless first: when a `social-browser daemon`
+// is running (local or remote pool), fetches go through a warm
+// browser pool (~3s end-to-end) and JS-rendered SPAs / soft bot
+// challenges resolve cleanly; when no daemon is reachable the
+// headless transport returns a clean error and the chain falls
+// through to HTTP. HTTP is the cheap fallback for plain static
+// pages when headless is unavailable; bridge handles the
+// auth-required case (CF challenges with the user's session);
+// jina is the remote-service catch-all.
 //
 // Operators who want the old "fast HTTP first, headless only as
 // fallback" shape can set

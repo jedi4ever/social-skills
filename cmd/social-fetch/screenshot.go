@@ -1,9 +1,10 @@
 package main
 
 // CLI for `social-fetch screenshot` — capture a PNG of any URL via
-// the headless browser stack. Goes through the daemon's warm pool
-// when one is reachable (fast: ~1-2s) and falls back to spawning a
-// fresh in-process Chromium otherwise (~3-4s warm-up).
+// a social-browser daemon's warm chromedp pool. Requires a daemon
+// to be running; start one with `social-browser daemon start
+// --provider local` (in-process pool) or `--provider daytona`
+// (remote pool). Returns a clean error if no daemon is reachable.
 //
 // Default output path: a stable temp file pattern (one per URL slug
 // + timestamp), so agents can call this without specifying -o and
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"github.com/jedi4ever/social-skills/internal/render/headless"
+	"github.com/jedi4ever/social-skills/internal/util/pngutil"
 )
 
 func runScreenshot(args []string) error {
@@ -29,7 +31,7 @@ func runScreenshot(args []string) error {
 	out := fs.String("o", "", "output path for the PNG (default: temp file). Use `-` for stdout.")
 	fullPage := fs.Bool("full-page", true, "capture the entire scrollable page (default true; set false for viewport-only)")
 	settle := fs.Duration("settle", 0, "JS-hydration wait after navigate (default: daemon/in-process default of 2s)")
-	viewport := fs.String("viewport", "", "viewport WxH override, e.g. `1280x720`. Only honoured on the in-process path; daemon mode uses the slot's launched viewport.")
+	viewport := fs.String("viewport", "", "viewport WxH override, e.g. `1280x720`. Note: the daemon's slots are launched with a fixed viewport at start; this flag is currently a no-op until a future per-call viewport feature is added.")
 	timeout := fs.Duration("timeout", 0, "per-call timeout including browser launch (default 60s)")
 	maxHeight := fs.Int("max-height", 0, "crop the captured PNG to the top N pixels (0 = no crop). Useful when feeding the result into a vision tool with a per-image size cap.")
 	if err := fs.Parse(args); err != nil {
@@ -61,8 +63,8 @@ func runScreenshot(args []string) error {
 	ctx := context.Background()
 	if *timeout > 0 {
 		// Parent-level cap so a wedged daemon HTTP roundtrip can't
-		// pin the CLI forever. The headless package's own per-call
-		// Timeout bounds browser work separately.
+		// pin the CLI forever. The daemon's per-slot timeout bounds
+		// browser work separately.
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, *timeout)
 		defer cancel()
@@ -81,7 +83,7 @@ func runScreenshot(args []string) error {
 	// size limits; cropping a 30 000 px tall page to 4096 keeps
 	// the PNG under those caps.
 	if *maxHeight > 0 {
-		out, _, cerr := headless.CropPNGTop(res.PNG, *maxHeight)
+		out, _, cerr := pngutil.CropPNGTop(res.PNG, *maxHeight)
 		if cerr != nil {
 			fmt.Fprintf(os.Stderr, "screenshot: crop failed: %v (using uncropped image)\n", cerr)
 		} else {
@@ -193,8 +195,9 @@ Examples:
   social-fetch screenshot https://example.com --viewport 1280x720 --full-page=false
   social-fetch screenshot https://example.com -o - | open -f -a Preview
 
-Daemon: when the headless daemon is up (` + "`social-fetch headless start`" + `)
-the call goes through the warm browser pool — typical 1-2s. Without it,
-each call spawns a fresh Chromium (~3-4s). Either path is auto-detected.
+Daemon: requires a social-browser daemon to be running. Start one with
+` + "`social-browser daemon start --provider local`" + ` (in-process chromedp pool)
+or ` + "`social-browser daemon start --provider daytona`" + ` (remote pool).
+Typical 1-2s once warm.
 `)
 }

@@ -25,7 +25,9 @@ import (
 	"time"
 
 	"github.com/jedi4ever/social-skills/internal/browser"
+	"github.com/jedi4ever/social-skills/internal/browser/local"
 	dprovider "github.com/jedi4ever/social-skills/internal/browser/providers/daytona"
+	"github.com/jedi4ever/social-skills/internal/render/headless"
 )
 
 func cmdDaemon(args []string) error {
@@ -53,30 +55,48 @@ func cmdDaemon(args []string) error {
 func runDaemonForeground(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	bind := fs.String("bind", fmt.Sprintf("127.0.0.1:%d", browser.DefaultDaemonPort), "listen address")
-	provider := fs.String("provider", "daytona", "backend provider (daytona today; local in v2)")
-	onlyID := fs.String("id", "", "pin the fleet to a single backend id (debugging)")
-	verbose := fs.Bool("verbose", false, "log outgoing URL + token prefix + non-2xx response bodies")
+	provider := fs.String("provider", "daytona", "backend provider (daytona | local)")
+	// Daytona-only flags — no-op for --provider local.
+	onlyID := fs.String("id", "", "(daytona) pin the fleet to a single backend id (debugging)")
+	verbose := fs.Bool("verbose", false, "(daytona) log outgoing URL + token prefix + non-2xx response bodies")
+	// Local-only flags — no-op for --provider daytona.
+	poolSize := fs.Int("pool-size", local.DefaultPoolSize, "(local) number of warm chromedp browsers to keep ready")
+	recycleAfter := fs.Int("recycle-after", local.DefaultRecycleAfter, "(local) recycle each browser after N fetches; 0 = never")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	prov, err := buildProvider(*provider)
-	if err != nil {
-		return err
-	}
-
-	d := &browser.Daemon{
-		Provider: prov,
-		OnlyID:   *onlyID,
-		Verbose:  *verbose,
-		Logf:     func(format string, a ...any) { fmt.Fprintf(os.Stderr, "browser-daemon: "+format+"\n", a...) },
-	}
+	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "browser-daemon: "+format+"\n", a...) }
 
 	// Cancel on SIGINT / SIGTERM — clean exit so the parent
 	// `start` orchestrator can wait properly.
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	return d.Run(ctx, *bind)
+
+	switch strings.ToLower(*provider) {
+	case "local":
+		d := &local.Daemon{
+			PoolSize:     *poolSize,
+			RecycleAfter: *recycleAfter,
+			Options:      headless.OptionsFromEnv(),
+			Logf:         logf,
+		}
+		return d.Run(ctx, *bind)
+	case "daytona":
+		prov, err := buildProvider(*provider)
+		if err != nil {
+			return err
+		}
+		d := &browser.Daemon{
+			Provider: prov,
+			OnlyID:   *onlyID,
+			Verbose:  *verbose,
+			Logf:     logf,
+		}
+		return d.Run(ctx, *bind)
+	default:
+		return fmt.Errorf("daemon: unknown --provider %q (try: daytona | local)", *provider)
+	}
 }
 
 // runDaemonStart forks a detached child running `daemon run` so
@@ -87,17 +107,21 @@ func runDaemonForeground(args []string) error {
 func runDaemonStart(args []string) error {
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	bind := fs.String("bind", fmt.Sprintf("127.0.0.1:%d", browser.DefaultDaemonPort), "listen address")
-	provider := fs.String("provider", "daytona", "backend provider")
-	pool := fs.Int("pool", 0, "ensure the fleet has at least N backends; spawns more via the provider when below")
-	onlyID := fs.String("id", "", "pin the fleet to a single backend id (debugging)")
-	verbose := fs.Bool("verbose", false, "log outgoing URL + token prefix + non-2xx response bodies")
+	provider := fs.String("provider", "daytona", "backend provider (daytona | local)")
+	pool := fs.Int("pool", 0, "(daytona) ensure the fleet has at least N backends; spawns more via the provider when below")
+	onlyID := fs.String("id", "", "(daytona) pin the fleet to a single backend id (debugging)")
+	verbose := fs.Bool("verbose", false, "(daytona) log outgoing URL + token prefix + non-2xx response bodies")
+	poolSize := fs.Int("pool-size", local.DefaultPoolSize, "(local) number of warm chromedp browsers to keep ready")
+	recycleAfter := fs.Int("recycle-after", local.DefaultRecycleAfter, "(local) recycle each browser after N fetches; 0 = never")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	// Top-up the fleet first, so by the time the daemon comes up
-	// it already sees the requested capacity.
-	if *pool > 0 {
+	// it already sees the requested capacity. Only meaningful for
+	// daytona — for local, the pool is built in-process by the
+	// child via --pool-size.
+	if *pool > 0 && strings.EqualFold(*provider, "daytona") {
 		if err := topUpFleet(context.Background(), *provider, *pool); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: fleet top-up failed: %v\n", err)
 		}
@@ -128,6 +152,12 @@ func runDaemonStart(args []string) error {
 	}
 	if *verbose {
 		childArgs = append(childArgs, "--verbose")
+	}
+	if strings.EqualFold(*provider, "local") {
+		childArgs = append(childArgs,
+			"--pool-size", strconv.Itoa(*poolSize),
+			"--recycle-after", strconv.Itoa(*recycleAfter),
+		)
 	}
 	cmd := exec.Command(self, childArgs...)
 	cmd.Stdout = logF

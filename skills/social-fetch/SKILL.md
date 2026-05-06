@@ -12,14 +12,13 @@ allowed-tools: |
   Bash(scripts/social-fetch bridge status)
   Bash(scripts/social-fetch bridge status *)
   Bash(scripts/social-fetch bridge run)
-  Bash(scripts/social-fetch headless start)
-  Bash(scripts/social-fetch headless start *)
-  Bash(scripts/social-fetch headless stop)
-  Bash(scripts/social-fetch headless status)
-  Bash(scripts/social-fetch headless status *)
-  Bash(scripts/social-fetch headless monitor)
-  Bash(scripts/social-fetch headless monitor *)
-  Bash(scripts/social-fetch headless run)
+  Bash(scripts/social-browser daemon start)
+  Bash(scripts/social-browser daemon start *)
+  Bash(scripts/social-browser daemon stop)
+  Bash(scripts/social-browser daemon status)
+  Bash(scripts/social-browser daemon status *)
+  Bash(scripts/social-browser daemon run)
+  Bash(scripts/social-browser provider *)
   Bash(scripts/social-fetch bookmarks list)
   Bash(scripts/social-fetch bookmarks list *)
   Bash(scripts/social-fetch bookmarks profiles)
@@ -72,7 +71,6 @@ scripts/social-fetch timeline <user-or-url>       [flags]   recent activity for 
 scripts/social-fetch ask      "<question>"        [flags]   grounded answer engine (perplexity / grok / openai / anthropic / gemini / tavily / serpapi)
 scripts/social-fetch research "<question>"        [flags]   EXPERIMENTAL — multi-angle research (decompose → parallel fan-out → synthesize)
 scripts/social-fetch bridge   {start|stop|status|run}
-scripts/social-fetch headless {start|stop|status|monitor|run}
 scripts/social-fetch bookmarks {list|profiles}              local browser bookmarks (chrome today; --platform NAME)
 scripts/social-fetch hints    [<platform>]                  per-platform quirks, rate limits, gotchas (x / linkedin / reddit / ...)
 ```
@@ -311,20 +309,26 @@ In daemon mode, `social_fetch_fetch` returns `content_url` (HTTP pointer) instea
 
 **Multi-project ledgers**: every ledger lives under `<base>/projects/<NAME>/`. The default project is `social_fetch`; set `SOCIAL_LEDGER_PROJECT=research-x` to switch to a separate ledger for that context. Pre-projects bare ledgers migrate automatically on first run (no operator action needed). One daemon serves one project; run multiple daemons on different ports for parallel projects.
 
-### Headless browser pool (faster anonymous fetches)
+### Headless browser pool (anonymous JS-rendered fetches)
 
-Separate from the bridge. `headless start` daemonises a pool of warm headless Chromium browsers. Article / LinkedIn / Medium / Substack chains include `headless`; with the daemon running fetches drop from ~5–6s (cold spawn) to ~3s (warm tab). Anonymous-only — no session reuse, never touches the user's real Chrome profile.
+Separate from the bridge. `social-browser daemon start --provider local` daemonises a pool of warm headless Chromium browsers. Article / LinkedIn / Medium / Substack chains include `headless` and route through the daemon; typical 1–3s when warm. Anonymous-only — no session reuse, never touches the user's real Chrome profile.
 
 ```
-scripts/social-fetch headless start                  # default pool=2 recycle=50
-scripts/social-fetch headless status                 # one-shot pool snapshot
-scripts/social-fetch headless monitor                # live-tailing TUI view
-scripts/social-fetch headless stop
+scripts/social-browser daemon start --provider local --pool-size 2 --recycle-after 50
+curl -s http://127.0.0.1:5560/status     # snapshot
+scripts/social-browser daemon stop
 ```
 
-When the daemon's down, headless transparently falls back to per-call spawn — fetches still work, just slower. Run `scripts/social-fetch headless --help` for tuning flags (`--pool N`, `--recycle N`, `--port N`).
+**There is no in-process fallback** — when no daemon is running, `social-fetch screenshot` (and any JS-rendered platform chain) returns a clean error pointing at the start command above. No silent slow-path.
 
-**When to start it:** before any batch fetch with `-j > 1`, before research loops, when fetching JS-rendered articles where `http` returns a thin shell.
+For remote pools (chromedp running in Daytona sandboxes, fronted as a round-robin proxy):
+
+```
+scripts/social-browser provider daytona up -n 3
+scripts/social-browser daemon start --provider daytona
+```
+
+**When to start it:** before any batch fetch with `-j > 1`, before research loops, when fetching JS-rendered articles where `http` returns a thin shell, before `social-fetch screenshot`.
 
 ## YouTube
 

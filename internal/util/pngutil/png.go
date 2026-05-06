@@ -1,14 +1,16 @@
-package headless
-
-// PNG manipulation helpers used by the screenshot tools. Lives in
-// the headless package so both the CLI (cmd/social-fetch/screenshot.go)
-// and the MCP tools (internal/mcp/screenshot_tools.go) can share
-// one implementation — they both already import this package, so
-// no new dependency edges are added.
+// Package pngutil is a small set of PNG header / cropping helpers
+// used by the screenshot CLI (cmd/social-fetch/screenshot.go) and
+// the MCP tools (internal/mcp/screenshot_tools.go). Pulled out of
+// the headless package so callers don't need a chromedp-linking
+// dependency just to size or slice a PNG.
 //
 // PNG decode/encode round-trip uses Go stdlib only (no native
 // deps), trading a bit of throughput for portability — typical
 // 1MB PNG decodes in < 50 ms on modern hardware.
+//
+// Named pngutil rather than png because the stdlib image/png import
+// already owns that identifier.
+package pngutil
 
 import (
 	"bytes"

@@ -14,13 +14,12 @@ import (
 	"github.com/jedi4ever/social-skills/internal/browser"
 )
 
-// DaemonClient talks to a running headless daemon (`social-fetch
-// headless start`) or a social-browser pool (`social-browser daemon
-// start`). Cheap to construct — no resources held until Fetch is
-// called. Used transparently by Fetcher when a daemon is reachable;
-// falls through to in-process spawn otherwise.
+// DaemonClient talks to a social-browser daemon (proxy on :5560
+// fronting remote chromedp endpoints, OR local chromedp pool on
+// the same port via `--provider local`). Cheap to construct — no
+// resources held until Fetch is called.
 type DaemonClient struct {
-	BaseURL string        // e.g. http://127.0.0.1:5556 — picked from candidates by Reachable
+	BaseURL string        // default http://127.0.0.1:5560
 	HTTP    *http.Client  // override for tests; default has 90s Timeout
 	Timeout time.Duration // per-request deadline (default 90s)
 	// Token, when non-empty, is sent as Authorization: Bearer <token>
@@ -30,66 +29,33 @@ type DaemonClient struct {
 	// Bearer for its own auth) or a Daytona-tunneled one without
 	// branching on URL shape.
 	Token string
-	// candidates holds the ordered list of URLs Reachable will probe
-	// when no explicit SOCIAL_FETCH_HEADLESS_DAEMON_URL was given.
-	// First responder wins; BaseURL is overwritten on hit. Empty when
-	// the URL was pinned via env — Reachable then probes BaseURL only.
-	candidates []string
 }
 
-// NewDaemonClient builds a client pointed at the configured daemon
-// URL. SOCIAL_FETCH_HEADLESS_DAEMON_URL overrides; otherwise
-// Reachable autodetects between two well-known loopback ports:
-//
-//	5560 — social-browser pool daemon (round-robins across a fleet)
-//	5556 — social-fetch headless daemon (single-host chromedp)
-//
-// Pool wins when both are up so multi-instance setups beat a leftover
-// single-host daemon. Operators who explicitly want the single-host
-// path (e.g. session-affinity flows that can't tolerate round-robin)
-// set SOCIAL_FETCH_HEADLESS_POOL_DISABLE=1 to skip the 5560 probe.
+// NewDaemonClient builds a client pointed at the social-browser
+// daemon. SOCIAL_FETCH_HEADLESS_DAEMON_URL overrides; default is
+// http://127.0.0.1:5560 — what `social-browser daemon start`
+// listens on by default.
 //
 // SOCIAL_FETCH_HEADLESS_DAEMON_TOKEN, when set, attaches as a
 // bearer + Daytona-preview header on every call — required when
-// the URL points at a Daytona tunnel (`https://5556-<id>.daytonaproxy01.net`)
-// or any other auth-gated reverse proxy.
+// the URL points at a Daytona tunnel
+// (`https://5556-<id>.daytonaproxy01.net`) or any other auth-gated
+// reverse proxy. Local-pool deployments don't need a token.
+//
+// Pre-v0.15.0 versions probed both :5560 and :5556 to support the
+// retired single-host `social-fetch headless` daemon. That path is
+// gone; the client now only knows about :5560.
 func NewDaemonClient() *DaemonClient {
 	token := strings.TrimSpace(os.Getenv("SOCIAL_FETCH_HEADLESS_DAEMON_TOKEN"))
-	if url := strings.TrimSpace(os.Getenv("SOCIAL_FETCH_HEADLESS_DAEMON_URL")); url != "" {
-		return &DaemonClient{
-			BaseURL: url,
-			Timeout: 90 * time.Second,
-			Token:   token,
-		}
-	}
-	// Default candidate chain — try the pool first, then fall back to
-	// the single-host daemon. BaseURL stays at the fallback so callers
-	// that skip Reachable() (rare, but possible in tests) keep today's
-	// behaviour.
-	single := fmt.Sprintf("http://127.0.0.1:%d", DefaultDaemonPort)
-	candidates := []string{single}
-	if !poolDisabled() {
-		pool := fmt.Sprintf("http://127.0.0.1:%d", browser.DefaultDaemonPort)
-		candidates = []string{pool, single}
+	url := strings.TrimSpace(os.Getenv("SOCIAL_FETCH_HEADLESS_DAEMON_URL"))
+	if url == "" {
+		url = fmt.Sprintf("http://127.0.0.1:%d", browser.DefaultDaemonPort)
 	}
 	return &DaemonClient{
-		BaseURL:    single,
-		Timeout:    90 * time.Second,
-		Token:      token,
-		candidates: candidates,
+		BaseURL: url,
+		Timeout: 90 * time.Second,
+		Token:   token,
 	}
-}
-
-// poolDisabled reports whether SOCIAL_FETCH_HEADLESS_POOL_DISABLE is
-// set to a truthy value. Same lax parser as the rest of the env-flag
-// surface in this repo: empty / "0" / "false" / "no" mean "leave the
-// pool probe enabled."
-func poolDisabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("SOCIAL_FETCH_HEADLESS_POOL_DISABLE"))) {
-	case "", "0", "false", "no", "off":
-		return false
-	}
-	return true
 }
 
 // applyAuth adds bearer + Daytona-preview headers to req when
@@ -102,39 +68,16 @@ func (c *DaemonClient) applyAuth(req *http.Request) {
 	req.Header.Set("X-Daytona-Preview-Token", c.Token)
 }
 
-// Reachable does a cheap GET /status to check whether the daemon is
-// alive. Used by Fetcher.Fetch to decide between daemon-mode and
-// in-process spawn. ~50 ms when up locally, ~connection-refused-fast
-// when down. Cap at 1.5s per candidate — covers cross-region
-// Daytona-tunnel latency (~500ms RTT EU↔US) plus TLS overhead on the
-// proxy. The previous 250ms cap silently routed every Daytona-remote
-// daemon call to in-process spawn because the probe always timed out.
-//
-// When the client was built without an explicit URL, walks the
-// candidate list (pool 5560 → single-host 5556 by default) and pins
-// BaseURL to the first responder. Subsequent calls (Fetch /
-// Screenshot / Status) hit that URL directly without re-probing.
+// Reachable does a cheap GET /status to check whether the daemon
+// is alive. ~50 ms when up locally, ~connection-refused-fast when
+// down. Cap at 1.5s — covers cross-region Daytona-tunnel latency
+// (~500ms RTT EU↔US) plus TLS overhead on the proxy. The previous
+// 250ms cap silently failed every Daytona-remote daemon call
+// because the probe always timed out.
 func (c *DaemonClient) Reachable(ctx context.Context) bool {
-	candidates := c.candidates
-	if len(candidates) == 0 {
-		candidates = []string{c.BaseURL}
-	}
-	for _, url := range candidates {
-		if c.probe(ctx, url) {
-			c.BaseURL = url
-			return true
-		}
-	}
-	return false
-}
-
-// probe is the per-URL half of Reachable — single GET /status with a
-// 1.5s cap. Split out so Reachable can iterate candidates without
-// duplicating the http.Client + auth-header dance.
-func (c *DaemonClient) probe(ctx context.Context, url string) bool {
 	probeCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer cancel()
-	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, url+"/status", nil)
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, c.BaseURL+"/status", nil)
 	if err != nil {
 		return false
 	}
@@ -278,43 +221,20 @@ func (c *DaemonClient) Screenshot(ctx context.Context, url string, settle time.D
 	}, nil
 }
 
-// StatusResponse is the parsed /status JSON, exported so CLI
-// commands can format it without re-decoding. Field names match
-// the JSON tags on the daemon's internal statusResponse so tests
-// and CLI use the same shape.
-type StatusResponse = statusResponse
+// fetchRequest / fetchResponse / screenshotRequest are the wire
+// shapes the daemon expects on /fetch and /screenshot. Mirrored from
+// internal/browser/local/daemon.go (chromedp pool) and
+// internal/browser/daemon.go (proxy) — both sides agree on this shape.
+type fetchRequest struct {
+	URL string `json:"url"`
+}
 
-// SlotState is the per-slot snapshot exported for CLI rendering.
-type SlotState = slotState
+type fetchResponse struct {
+	HTML     string `json:"html"`
+	FinalURL string `json:"final_url"`
+	Engine   string `json:"engine"`
+}
 
-// FetchEntry is one row in the recent-fetch history.
-type FetchEntry = fetchEntry
-
-// Status hits GET /status and returns the parsed response. Used by
-// the `social-fetch headless status` CLI subcommand.
-func (c *DaemonClient) Status(ctx context.Context) (*StatusResponse, error) {
-	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, c.BaseURL+"/status", nil)
-	if err != nil {
-		return nil, err
-	}
-	c.applyAuth(req)
-	client := c.HTTP
-	if client == nil {
-		client = &http.Client{Timeout: 2 * time.Second}
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	var s statusResponse
-	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
-		return nil, err
-	}
-	return &s, nil
+type screenshotRequest struct {
+	URL string `json:"url"`
 }

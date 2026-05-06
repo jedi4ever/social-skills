@@ -1,4 +1,13 @@
-package headless
+// Package local runs an in-process chromedp browser pool and serves
+// the same /fetch /screenshot /status /health /monitor HTTP surface
+// that internal/browser/daemon.go (the proxy daemon) serves.
+//
+// Used by `social-browser daemon start --provider local`. Replaces
+// the chromedp pool that previously lived in
+// internal/render/headless/daemon.go; identical lifecycle (slot
+// pool, recycle-after-N, fetch ring buffer) but rehoused here so
+// social-fetch no longer needs to link chromedp.
+package local
 
 import (
 	"context"
@@ -14,17 +23,12 @@ import (
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
+
+	"github.com/jedi4ever/social-skills/internal/render/headless"
 )
 
-// DefaultDaemonPort is the loopback port `social-fetch headless start`
-// listens on. Picked to sit next to the bridge's :5555 so operators
-// keep one mental model for "social-fetch's local services live in
-// the 5555-5559 range." Override with --bind on `headless start` or
-// SOCIAL_FETCH_HEADLESS_DAEMON_URL on clients.
-const DefaultDaemonPort = 5556
-
 // DefaultPoolSize is how many warm browsers the daemon keeps ready
-// when no env override is set. Four matches `social-fetch fetch -j`'s
+// when no flag override is set. Four matches `social-fetch fetch -j`'s
 // default parallelism so a typical batch fetch (or 4 concurrent MCP
 // tool calls) doesn't queue. Memory cost is ~120-160 MB total at
 // rest; small enough on any modern machine, large enough that batch
@@ -39,7 +43,7 @@ const DefaultPoolSize = 4
 // enough that fingerprint accumulation stays bounded.
 const DefaultRecycleAfter = 50
 
-// Daemon is the long-lived headless-browser pool exposed over HTTP.
+// Daemon is the long-lived chromedp pool exposed over HTTP.
 // Lifecycle: pool initialised on Run(); each /fetch request
 // acquires a slot, runs the chromedp navigation, releases the slot.
 // Slots that hit RecycleAfter get torn down and respawned in place.
@@ -57,11 +61,11 @@ type Daemon struct {
 	// before being torn down + respawned. <=0 disables recycling.
 	RecycleAfter int
 
-	// FetcherOptions overrides what each browser is launched with.
-	// Empty fields fall back to DefaultOptions equivalents (same as
-	// in-process NewWithOptions). Cookies are *not* honoured on the
-	// daemon today — daemon mode is anonymous-only.
-	FetcherOptions Options
+	// Options overrides what each browser is launched with.
+	// Empty fields fall back to headless.DefaultOptions equivalents.
+	// Cookies are *not* honoured on the daemon today — daemon mode
+	// is anonymous-only.
+	Options headless.Options
 
 	// Logf is the audit hook. Defaults to a no-op so tests don't
 	// spam stderr; the CLI wires it to fmt.Fprintf(os.Stderr,...).
@@ -119,7 +123,7 @@ type fetchEntry struct {
 }
 
 // fetchRing is a fixed-size ring of recent fetches. 32 entries is
-// enough to populate a `headless monitor` view; older entries are
+// enough to populate a `monitor` view; older entries are
 // overwritten. Newest-first ordering on read so the monitor doesn't
 // have to reverse.
 type fetchRing struct {
@@ -229,26 +233,25 @@ func (d *Daemon) Run(ctx context.Context, addr string) error {
 // /fetch reuses them by creating a fresh tab via chromedp.NewContext
 // with the slot's browserCtx as parent.
 func (d *Daemon) newSlot(parent context.Context, id int) (*slot, error) {
-	opts := d.FetcherOptions
-	// Fill defaults same way NewWithOptions does so the daemon
-	// browsers match in-process behaviour exactly.
+	opts := d.Options
+	def := headless.DefaultOptions
 	if opts.UserAgent == "" {
-		opts.UserAgent = DefaultOptions.UserAgent
+		opts.UserAgent = def.UserAgent
 	}
 	if opts.Locale == "" {
-		opts.Locale = DefaultOptions.Locale
+		opts.Locale = def.Locale
 	}
 	if opts.Timezone == "" {
-		opts.Timezone = DefaultOptions.Timezone
+		opts.Timezone = def.Timezone
 	}
 	if opts.ViewportWidth == 0 {
-		opts.ViewportWidth = DefaultOptions.ViewportWidth
+		opts.ViewportWidth = def.ViewportWidth
 	}
 	if opts.ViewportHeight == 0 {
-		opts.ViewportHeight = DefaultOptions.ViewportHeight
+		opts.ViewportHeight = def.ViewportHeight
 	}
 	if opts.Settle == 0 {
-		opts.Settle = DefaultOptions.Settle
+		opts.Settle = def.Settle
 	}
 	opts.Headless = true // daemon never wants a visible window
 
@@ -464,11 +467,10 @@ func (d *Daemon) releaseSlot(s *slot, errored bool) *slot {
 	return fresh
 }
 
-// runFetch is the actual chromedp navigate+grab. Mirrors what the
-// in-process Fetcher.Fetch does, except it reuses slot.browserCtx
-// instead of spinning up a fresh allocator per call. A child
-// context with chromedp.NewContext(slot.browserCtx) gives us a
-// fresh tab inside the warm browser.
+// runFetch is the actual chromedp navigate+grab. Reuses
+// slot.browserCtx instead of spinning up a fresh allocator per
+// call. A child context with chromedp.NewContext(slot.browserCtx)
+// gives us a fresh tab inside the warm browser.
 //
 // settleOverride > 0 replaces the daemon's default settle for
 // this call. Used by callers retrying a thin-content fetch
@@ -476,14 +478,12 @@ func (d *Daemon) releaseSlot(s *slot, errored bool) *slot {
 // attempt's body is suspiciously short — likely a JS-rendered
 // SPA that needed more hydration time).
 func (d *Daemon) runFetch(reqCtx context.Context, s *slot, url string, settleOverride time.Duration) (html, finalURL string, err error) {
-	// New tab inside the warm browser. cancel() closes the tab,
-	// not the browser.
 	tabCtx, cancelTab := chromedp.NewContext(s.browserCtx)
 	defer cancelTab()
 
-	timeout := d.FetcherOptions.Timeout
+	timeout := d.Options.Timeout
 	if timeout == 0 {
-		timeout = DefaultOptions.Timeout
+		timeout = headless.DefaultOptions.Timeout
 	}
 	timedCtx, cancelTimeout := context.WithTimeout(tabCtx, timeout)
 	defer cancelTimeout()
@@ -499,10 +499,10 @@ func (d *Daemon) runFetch(reqCtx context.Context, s *slot, url string, settleOve
 	}
 	settle := settleOverride
 	if settle == 0 {
-		settle = d.FetcherOptions.Settle
+		settle = d.Options.Settle
 	}
 	if settle == 0 {
-		settle = DefaultOptions.Settle
+		settle = headless.DefaultOptions.Settle
 	}
 	if settle > 0 {
 		actions = append(actions, chromedp.Sleep(settle))
@@ -527,9 +527,9 @@ func (d *Daemon) runFetch(reqCtx context.Context, s *slot, url string, settleOve
 }
 
 // statusResponse is the GET /status JSON. Summary counters plus
-// per-slot detail and a recent-fetch ring — enough for `headless
-// monitor` to render a live view of "what's the daemon doing right
-// now?" without needing a separate /events stream.
+// per-slot detail and a recent-fetch ring — enough for the monitor
+// to render a live view of "what's the daemon doing right now?"
+// without needing a separate /events stream.
 //
 // UsesRemaining is kept for backwards compat with v1 clients; new
 // callers should read Slots[].UsesRemaining instead.
@@ -543,10 +543,7 @@ type statusResponse struct {
 	UsesRemaining []int        `json:"uses_remaining"` // deprecated
 }
 
-func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
-	// All state lives in d.state (mutex-guarded) — no need to
-	// touch the pool channel for status, which means /status
-	// answers instantly even under heavy /fetch load.
+func (d *Daemon) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	d.stateMu.Lock()
 	slots := make([]slotState, 0, d.PoolSize)
 	uses := make([]int, 0, d.PoolSize)
@@ -587,9 +584,9 @@ func (d *Daemon) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 // handleMonitor renders the daemon's status as a human-readable
-// text page. Snapshot equivalent of `social-fetch headless monitor`,
-// suitable for `curl … | less` operator checks inside containers
-// where parsing JSON /status by hand is awkward.
+// text page. Snapshot equivalent of the older `social-fetch headless
+// monitor`, suitable for `curl … | less` operator checks inside
+// containers where parsing JSON /status by hand is awkward.
 func (d *Daemon) handleMonitor(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 
@@ -612,7 +609,7 @@ func (d *Daemon) handleMonitor(w http.ResponseWriter, _ *http.Request) {
 	d.stateMu.Unlock()
 
 	up := time.Since(d.startAt).Round(time.Second)
-	fmt.Fprintln(w, "social-fetch headless daemon")
+	fmt.Fprintln(w, "social-browser local pool")
 	fmt.Fprintf(w, "  uptime         %s\n", up)
 	fmt.Fprintf(w, "  pool size      %d\n", d.PoolSize)
 	fmt.Fprintf(w, "  in use         %d\n", inUse)
@@ -652,7 +649,6 @@ func (d *Daemon) handleShutdown(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
-	// Async shutdown so the response can flush before the server stops.
 	go func() {
 		time.Sleep(100 * time.Millisecond)
 		d.shutdown()
@@ -661,8 +657,7 @@ func (d *Daemon) handleShutdown(w http.ResponseWriter, r *http.Request) {
 
 // screenshotRequest mirrors fetchRequest: URL in via JSON body. Settle
 // + full_page come in as query params so the same handler shape works
-// for both endpoints. Could be in the body — kept on the URL for
-// parity with `?settle=` already used on /fetch.
+// for both endpoints.
 type screenshotRequest struct {
 	URL string `json:"url"`
 }
@@ -745,9 +740,9 @@ func (d *Daemon) runScreenshot(reqCtx context.Context, s *slot, url string, sett
 	tabCtx, cancelTab := chromedp.NewContext(s.browserCtx)
 	defer cancelTab()
 
-	timeout := d.FetcherOptions.Timeout
+	timeout := d.Options.Timeout
 	if timeout == 0 {
-		timeout = DefaultOptions.Timeout
+		timeout = headless.DefaultOptions.Timeout
 	}
 	timedCtx, cancelTimeout := context.WithTimeout(tabCtx, timeout)
 	defer cancelTimeout()
@@ -763,10 +758,10 @@ func (d *Daemon) runScreenshot(reqCtx context.Context, s *slot, url string, sett
 	}
 	settle := settleOverride
 	if settle == 0 {
-		settle = d.FetcherOptions.Settle
+		settle = d.Options.Settle
 	}
 	if settle == 0 {
-		settle = DefaultOptions.Settle
+		settle = headless.DefaultOptions.Settle
 	}
 	if settle > 0 {
 		actions = append(actions, chromedp.Sleep(settle))
@@ -802,8 +797,6 @@ func (d *Daemon) shutdown() {
 	if d.pool == nil {
 		return
 	}
-	// Drain the pool best-effort. Anything still in flight will
-	// hit a closed context when it tries to release.
 	close(d.pool)
 	for s := range d.pool {
 		s.cancelBrowser()

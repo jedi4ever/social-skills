@@ -253,37 +253,42 @@ the full display name OR the canonical slug, not a partial.
 
 ---
 
-## Headless browser pool — the local Chromium daemon
+## Headless browser pool — the social-browser daemon
 
-`social-fetch headless start` daemonises a pool of warm headless
-Chromium browsers. Article / LinkedIn / Medium / Substack chains
-include `headless` (chromedp under the hood) and route through the
-daemon transparently when it's running — fetches drop from
-~5-6s cold-spawn to ~3s warm-tab.
+`social-browser daemon start --provider local` daemonises a pool of
+warm headless Chromium browsers (chromedp under the hood). Article /
+LinkedIn / Medium / Substack chains include `headless` and route
+through the daemon transparently — fetches typically run ~3s when
+the pool is warm. **There is no in-process fallback in v0.15.0+** —
+without a daemon, `social-fetch screenshot` and JS-rendered platform
+chains return a clean error pointing at the start command.
 
 ```bash
-social-fetch headless start [--pool 2] [--recycle 50] [--port 5556]
-social-fetch headless status                  # one-shot pool snapshot
-social-fetch headless monitor                 # live-tailing TUI view
-social-fetch headless stop
+social-browser daemon start --provider local --pool-size 2 --recycle-after 50
+curl -s http://127.0.0.1:5560/status | jq .   # snapshot
+curl -s http://127.0.0.1:5560/monitor          # text view
+social-browser daemon stop
 ```
 
-Knobs (env, with `--flag` equivalents on `start`):
+For remote pools (chromedp running in Daytona sandboxes, fronted by
+the local daemon as a round-robin proxy):
+
+```bash
+social-browser provider daytona up -n 3
+social-browser daemon start --provider daytona
+```
+
+Knobs (env, on the social-fetch *client* side):
 
 | var | default | purpose |
 |---|---|---|
-| `SOCIAL_FETCH_HEADLESS_POOL_SIZE` | 2 | warm browsers (more = parallel batches) |
-| `SOCIAL_FETCH_HEADLESS_RECYCLE_AFTER` | 50 | kill+respawn each browser after N fetches (anti-bot identity rotation; 0 disables) |
-| `SOCIAL_FETCH_HEADLESS_DAEMON_URL` | http://127.0.0.1:5556 | clients look here; set to point at a remote daemon |
-| `SOCIAL_FETCH_HEADLESS_DAEMON_DISABLE` | unset | non-empty = clients always use in-process spawn |
-| `SOCIAL_FETCH_HEADLESS_USER_AGENT` | real-Chrome | UA the spawned browsers advertise |
+| `SOCIAL_FETCH_HEADLESS_DAEMON_URL` | http://127.0.0.1:5560 | client points here; set to a remote daemon URL when bypassing the local proxy |
+| `SOCIAL_FETCH_HEADLESS_DAEMON_TOKEN` | unset | bearer token for an auth-gated remote daemon (e.g. Daytona preview tunnel) |
+| `SOCIAL_FETCH_HEADLESS_USER_AGENT` | real-Chrome | UA the daemon's slots advertise (read at daemon start) |
 | `SOCIAL_FETCH_HEADLESS_TIMEOUT` | 60s | per-fetch deadline including launch |
-| `SOCIAL_FETCH_HEADLESS_SETTLE` | 2s | post-navigate sleep for JS hydration. The article fetcher auto-retries any thin (<100 char) response with a 6s settle once before falling through to the next chain method, so single-SPA flakes self-correct without operator action. Bump this for batch runs against many slow-hydrating sites. |
+| `SOCIAL_FETCH_HEADLESS_SETTLE` | 2s | post-navigate sleep for JS hydration. The article fetcher auto-retries any thin (<100 char) response with a 6s settle once before falling through to the next chain method. |
 
-When daemon's down, the headless transport falls back to in-process
-spawn so fetches still work — they just pay ~2s cold-start each.
-
-Cookies are NOT honoured in daemon mode (anonymous-only). For
+Cookies are NOT honoured by the daemon (anonymous-only). For
 authenticated content (LinkedIn comments, Medium / Substack
 member-only posts) use the bridge transport.
 

@@ -125,17 +125,28 @@ youtube summaries over mcp - too long or too much text on output
 
 ===
 defaulkt mem/cpu of daytona
-====
-social-researcher
+
 ====
 namespace daytona 
 ====
-social-agent
-====
 browser pool not via mcp ?
-autodetect socia-fetch browserpool on port?
 expose
 ====
-social-browser also local?
-====
 cleanup bookmarks
+====
+social-agent
+====
+social-researcher
+====
+bridge -> social-browser ?
+socia-fetch --browser headless,bridge
+local -> chromedp
+
+
+====
+I now want to build a social-agent : it can run sandboxed claude-code sessions.
+First provider is daytona for this. It will have its own dockerfile to include the claude-code.
+That social-agent will have our social-fetch as mcp.
+I should be able to set the env vars for it 
+
+I will later extend this into a social-research which will extend this to specific context/system prompt and agent tooling.

@@ -28,7 +28,7 @@ import (
 // Version is held in lockstep with social-fetch / social-ledger
 // and the claude-desktop / claude-code / marketplace manifests.
 // See CLAUDE.md "Versioning".
-const Version = "0.14.0"
+const Version = "0.15.0"
 
 func main() {
 	dotenv.LoadAuto()
@@ -68,10 +68,10 @@ USAGE
   social-browser provider <name>    manage backends for a substrate
 
 DAEMON
-  daemon start [--bind ADDR] [--pool N] [--id ID] [--verbose]
+  daemon start [--bind ADDR] --provider {daytona|local} [...]
                                           spawn the daemon (default :5560)
-                                          --id pins forwarding to one backend
-                                          --verbose logs outgoing URL + 4xx body
+    daytona-only:  --pool N --id ID --verbose
+    local-only:    --pool-size N --recycle-after N
   daemon stop                              stop a running daemon
   daemon status                            print fleet snapshot
   daemon run                               foreground (used by start)

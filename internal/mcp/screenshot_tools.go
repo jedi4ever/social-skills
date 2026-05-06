@@ -48,6 +48,7 @@ import (
 
 	"github.com/jedi4ever/social-skills/internal/ledger"
 	"github.com/jedi4ever/social-skills/internal/render/headless"
+	"github.com/jedi4ever/social-skills/internal/util/pngutil"
 )
 
 // inlineCap is the max raw PNG size we'll embed inline as
@@ -138,14 +139,14 @@ func addScreenshotTool(s *server.MCPServer, cfg Config) {
 		// the two views fixes that: the storage is always
 		// paginatable, the inline view is always vision-friendly.
 		fullPNG := res.PNG
-		origW, origH, _ := headless.PNGDims(fullPNG)
+		origW, origH, _ := pngutil.PNGDims(fullPNG)
 		origBytes := len(fullPNG)
 
 		inlinePNG := fullPNG
 		var cropped, autoCropped bool
 		appliedMax := args.MaxHeight
 		if args.MaxHeight > 0 {
-			out, didCrop, cerr := headless.CropPNGTop(inlinePNG, args.MaxHeight)
+			out, didCrop, cerr := pngutil.CropPNGTop(inlinePNG, args.MaxHeight)
 			if cerr != nil {
 				audit.Logf("screenshot %s crop failed: %v", args.URL, cerr)
 			} else {
@@ -159,7 +160,7 @@ func addScreenshotTool(s *server.MCPServer, cfg Config) {
 		// letting a 30k-px tall page exceed the cap leaves them
 		// blind. fullPNG stays the full page in storage either way.
 		if !cropped && len(inlinePNG) > inlineCap {
-			out, didCrop, cerr := headless.CropPNGTop(inlinePNG, autoCropHeight)
+			out, didCrop, cerr := pngutil.CropPNGTop(inlinePNG, autoCropHeight)
 			if cerr != nil {
 				audit.Logf("screenshot %s auto-crop failed: %v", args.URL, cerr)
 			} else if didCrop {
@@ -169,7 +170,7 @@ func addScreenshotTool(s *server.MCPServer, cfg Config) {
 				appliedMax = autoCropHeight
 			}
 		}
-		w, h, _ := headless.PNGDims(inlinePNG)
+		w, h, _ := pngutil.PNGDims(inlinePNG)
 
 		env := map[string]any{
 			"url":             args.URL,
@@ -304,7 +305,7 @@ func addReadScreenshotTool(s *server.MCPServer, cfg Config) {
 		// Original dims captured before slicing so the agent can
 		// see whether more remains below the slice they're
 		// reading. Critical for the multi-step read flow.
-		origW, origH, _ := headless.PNGDims(pngBytes)
+		origW, origH, _ := pngutil.PNGDims(pngBytes)
 		origBytes := len(pngBytes)
 
 		// Default max_height = 4096. Treat 0 as "use default" since
@@ -347,7 +348,7 @@ func addReadScreenshotTool(s *server.MCPServer, cfg Config) {
 
 		var cropped bool
 		if maxH > 0 || offsetY > 0 {
-			out, didCrop, cerr := headless.CropPNGSlice(pngBytes, offsetY, maxH)
+			out, didCrop, cerr := pngutil.CropPNGSlice(pngBytes, offsetY, maxH)
 			if cerr != nil {
 				audit.Logf("read_screenshot crop failed: %v", cerr)
 				return mcp.NewToolResultError(cerr.Error()), nil
@@ -355,7 +356,7 @@ func addReadScreenshotTool(s *server.MCPServer, cfg Config) {
 			pngBytes = out
 			cropped = didCrop
 		}
-		w, h, _ := headless.PNGDims(pngBytes)
+		w, h, _ := pngutil.PNGDims(pngBytes)
 
 		audit.Logf("read_screenshot %s (offset=%d max_h=%d → %d bytes %dx%d, cropped=%v)", source, offsetY, maxH, len(pngBytes), w, h, cropped)
 

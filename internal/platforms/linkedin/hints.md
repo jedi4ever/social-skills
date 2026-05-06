@@ -43,13 +43,14 @@ If you specifically need comments, override the chain to put
 bridge first and have the daemon + extension running. The
 headless path will never produce them — they're auth-walled.
 
-## Speeding up headless: the daemon
+## Headless requires the social-browser daemon
 
-`social-fetch headless start` daemonises a pool of warm Chromium
-browsers. With the daemon running, headless fetches drop from
-~5-6s (cold spawn) to ~3s (warm tab in an existing browser). See
-`social-fetch headless --help` and the top-level HINTS.md
-"Headless browser pool" section for tuning.
+`social-browser daemon start --provider local` daemonises a pool of
+warm Chromium browsers. **Required** for any headless-path fetch
+in v0.15.0+ — there is no in-process fallback. With the daemon
+running, headless fetches typically take ~3s (warm tab in an
+existing browser). See the top-level HINTS.md "Headless browser
+pool" section for tuning.
 
 ## URL tracking params get stripped automatically
 

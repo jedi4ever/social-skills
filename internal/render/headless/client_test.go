@@ -18,7 +18,7 @@ func TestDaemonClient_Reachable(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/status" {
 			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(statusResponse{PoolSize: 2})
+			_ = json.NewEncoder(w).Encode(map[string]any{"pool_size": 2})
 			return
 		}
 		http.NotFound(w, r)
@@ -101,12 +101,18 @@ func TestDaemonClient_FetchPropagatesServerError(t *testing.T) {
 	}
 }
 
-// TestNewDaemonClient_Env covers the URL override knob.
+// TestNewDaemonClient_Env covers the URL override knob and the
+// :5560 default that v0.15.0 settled on (single-port autodetect now
+// that the social-fetch headless daemon is gone).
 func TestNewDaemonClient_Env(t *testing.T) {
-	t.Run("default", func(t *testing.T) {
+	t.Run("default points at :5560", func(t *testing.T) {
+		t.Setenv("SOCIAL_FETCH_HEADLESS_DAEMON_URL", "")
 		c := NewDaemonClient()
 		if !strings.Contains(c.BaseURL, "127.0.0.1") {
 			t.Errorf("default BaseURL = %q, want loopback", c.BaseURL)
+		}
+		if !strings.Contains(c.BaseURL, "5560") {
+			t.Errorf("default BaseURL = %q, want :5560", c.BaseURL)
 		}
 	})
 	t.Run("env override", func(t *testing.T) {
@@ -115,59 +121,5 @@ func TestNewDaemonClient_Env(t *testing.T) {
 		if c.BaseURL != "https://my-headless.example.com:9000" {
 			t.Errorf("BaseURL = %q", c.BaseURL)
 		}
-		// Pinned URL: candidate list stays empty so Reachable
-		// probes only that URL — no spurious pool probe.
-		if len(c.candidates) != 0 {
-			t.Errorf("env override should clear candidates, got %v", c.candidates)
-		}
 	})
-	t.Run("default candidates: pool first, then single", func(t *testing.T) {
-		t.Setenv("SOCIAL_FETCH_HEADLESS_DAEMON_URL", "")
-		t.Setenv("SOCIAL_FETCH_HEADLESS_POOL_DISABLE", "")
-		c := NewDaemonClient()
-		if len(c.candidates) != 2 {
-			t.Fatalf("want 2 candidates (pool + single), got %v", c.candidates)
-		}
-		if !strings.Contains(c.candidates[0], "5560") {
-			t.Errorf("candidate[0] = %q, want pool (:5560)", c.candidates[0])
-		}
-		if !strings.Contains(c.candidates[1], "5556") {
-			t.Errorf("candidate[1] = %q, want single (:5556)", c.candidates[1])
-		}
-	})
-	t.Run("pool disabled: only single", func(t *testing.T) {
-		t.Setenv("SOCIAL_FETCH_HEADLESS_DAEMON_URL", "")
-		t.Setenv("SOCIAL_FETCH_HEADLESS_POOL_DISABLE", "1")
-		c := NewDaemonClient()
-		if len(c.candidates) != 1 {
-			t.Fatalf("want 1 candidate (single), got %v", c.candidates)
-		}
-		if !strings.Contains(c.candidates[0], "5556") {
-			t.Errorf("candidate[0] = %q, want single (:5556)", c.candidates[0])
-		}
-	})
-}
-
-// TestReachable_PicksFirstResponder verifies the autodetect picks the
-// first reachable URL from the candidate list and pins BaseURL to it,
-// even when an earlier candidate is dead.
-func TestReachable_PicksFirstResponder(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	c := &DaemonClient{
-		// First candidate points at a closed loopback port; second is
-		// the live test server. Reachable should fall through to the
-		// live one and pin BaseURL there.
-		BaseURL:    "http://127.0.0.1:1", // unreachable fallback
-		candidates: []string{"http://127.0.0.1:1", srv.URL},
-	}
-	if !c.Reachable(context.Background()) {
-		t.Fatalf("Reachable() = false, want true (test server is up)")
-	}
-	if c.BaseURL != srv.URL {
-		t.Errorf("BaseURL = %q, want pinned to test server %q", c.BaseURL, srv.URL)
-	}
 }

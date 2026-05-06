@@ -602,24 +602,30 @@ server-side, account-scoped) plug in as additional values.
 
 ## Headless browser pool (anonymous JS-rendered fetches)
 
-Separate from the bridge. `social-fetch headless start` daemonises
+Separate from the bridge. The `social-browser` binary daemonises
 a pool of warm Chromium browsers via chromedp — anonymous (no
 session reuse, never touches your real Chrome profile), fast
 (~3s warm-tab vs ~5-6s cold-spawn), used by article / LinkedIn /
 Medium / Substack chains when `headless` is in the chain.
 
 ```bash
-social-fetch headless start [--pool 2] [--recycle 50]
-social-fetch headless status     # one-shot pool snapshot
-social-fetch headless monitor    # live-tailing TUI view (Ctrl-C exits)
-social-fetch headless stop
+social-browser daemon start --provider local --pool-size 2 --recycle-after 50
+curl -s http://127.0.0.1:5560/status | jq .   # snapshot
+curl -s http://127.0.0.1:5560/monitor          # text view
+social-browser daemon stop
 ```
 
-When the daemon's down, the headless transport falls back to
-per-call spawn — fetches still work, just slower. Default chains
-already include `headless`; for the article fetcher it's the
-preferred path. See `social-fetch headless --help` for full flag
-list and the env vars (`SOCIAL_FETCH_HEADLESS_*`).
+When no daemon is running, social-fetch's headless transport
+returns a clean error pointing at this start command — there is
+no in-process fallback. social-fetch autodetects the daemon at
+`http://127.0.0.1:5560` (override with `SOCIAL_FETCH_HEADLESS_DAEMON_URL`).
+
+For remote pools (run chromedp in Daytona sandboxes, point
+clients at the local proxy daemon), use `--provider daytona` —
+see the social-browser provider section of `social-browser help`.
+
+Pre-v0.15.0 had a `social-fetch headless` subcommand; that's gone.
+Same defaults moved to `social-browser daemon start --provider local`.
 
 > **Permissions model — narrow by default, broad on opt-in.**
 >
