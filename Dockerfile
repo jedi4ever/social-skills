@@ -6,9 +6,9 @@
 # Claude Desktop / claude.ai / Daytona-tunneled agent can point at.
 #
 # Multi-stage so the runtime layer doesn't carry the Go toolchain.
-# Builder produces ./dist/social-fetch + ./dist/social-ledger;
-# runtime only carries those binaries plus chromium + a handful of
-# fonts.
+# Builder produces ./dist/social-fetch + ./dist/social-ledger +
+# ./dist/social-browser; runtime only carries those binaries plus
+# chromium + a handful of fonts.
 
 # === Stage 1: build the binaries ===========================================
 # go.mod requires 1.26+; bump in lockstep when the module's `go` line moves.
@@ -24,10 +24,11 @@ RUN go mod download
 COPY . .
 
 # Build flags match the Makefile: stripped + trimpath for reproducible
-# binaries. Output goes to /src/dist/{social-fetch, social-ledger}
-# which the runtime stage copies from.
+# binaries. Output goes to /src/dist/{social-fetch, social-ledger,
+# social-browser} which the runtime stage copies from.
 RUN go build -ldflags="-s -w" -trimpath -o ./dist/social-fetch ./cmd/social-fetch \
- && go build -ldflags="-s -w" -trimpath -o ./dist/social-ledger ./cmd/social-ledger
+ && go build -ldflags="-s -w" -trimpath -o ./dist/social-ledger ./cmd/social-ledger \
+ && go build -ldflags="-s -w" -trimpath -o ./dist/social-browser ./cmd/social-browser
 
 # === Stage 2: runtime ======================================================
 FROM debian:bookworm-slim AS runtime
@@ -60,8 +61,9 @@ RUN useradd -m -u 1000 -U -s /bin/bash sf \
  && mkdir -p /data \
  && chown sf:sf /data
 
-COPY --from=builder /src/dist/social-fetch  /usr/local/bin/social-fetch
-COPY --from=builder /src/dist/social-ledger /usr/local/bin/social-ledger
+COPY --from=builder /src/dist/social-fetch   /usr/local/bin/social-fetch
+COPY --from=builder /src/dist/social-ledger  /usr/local/bin/social-ledger
+COPY --from=builder /src/dist/social-browser /usr/local/bin/social-browser
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 

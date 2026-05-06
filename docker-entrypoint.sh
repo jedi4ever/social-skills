@@ -13,12 +13,17 @@
 #
 #   all       (default) — start headless + ledger + mcp, wait on
 #              any to exit, propagate SIGTERM.
-#   headless  — exec social-fetch headless run on :5556 alone.
+#   headless  — exec social-browser daemon run --provider local on
+#              :5556 alone.
 #   ledger    — exec social-ledger daemon run on :5557 alone.
 #   mcp       — exec social-fetch mcp --http :5558 alone.
 #   shell     — drop into /bin/sh for debugging (no daemons).
 #   <other>   — exec verbatim (passthrough so `docker run image
 #              social-fetch fetch URL` works).
+#
+# The headless slot pool moved from social-fetch to social-browser in
+# v0.15.0; same HTTP surface (/fetch /screenshot /status /health
+# /monitor) so existing healthchecks + clients keep working.
 
 set -eu
 
@@ -32,9 +37,18 @@ HEADLESS_BIND="${HEADLESS_BIND:-0.0.0.0:5556}"
 LEDGER_BIND="${LEDGER_BIND:-0.0.0.0:5557}"
 MCP_BIND="${MCP_BIND:-:5558}"
 
+# Local-pool tuning. Honour the v0.14-era SOCIAL_FETCH_HEADLESS_*
+# names too so operators upgrading from earlier images don't have to
+# rename anything.
+POOL_SIZE="${SOCIAL_BROWSER_POOL_SIZE:-${SOCIAL_FETCH_HEADLESS_POOL_SIZE:-4}}"
+RECYCLE_AFTER="${SOCIAL_BROWSER_RECYCLE_AFTER:-${SOCIAL_FETCH_HEADLESS_RECYCLE_AFTER:-50}}"
+
 case "$mode" in
   headless)
-    exec social-fetch headless run --bind "$HEADLESS_BIND" "$@"
+    exec social-browser daemon run --provider local \
+         --bind "$HEADLESS_BIND" \
+         --pool-size "$POOL_SIZE" \
+         --recycle-after "$RECYCLE_AFTER" "$@"
     ;;
   ledger)
     exec social-ledger daemon run --bind "$LEDGER_BIND" "$@"
@@ -49,7 +63,10 @@ case "$mode" in
     # Start in dependency order: headless first (slow startup, ~2s
     # per browser warmup), then ledger, then mcp which depends on
     # both being reachable.
-    social-fetch headless run --bind "$HEADLESS_BIND" &
+    social-browser daemon run --provider local \
+        --bind "$HEADLESS_BIND" \
+        --pool-size "$POOL_SIZE" \
+        --recycle-after "$RECYCLE_AFTER" &
     HEADLESS_PID=$!
 
     social-ledger daemon run --bind "$LEDGER_BIND" &

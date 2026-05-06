@@ -141,12 +141,15 @@ social-researcher
 bridge -> social-browser ?
 socia-fetch --browser headless,bridge
 local -> chromedp
-
+====
+up / shutdown / resume
 
 ====
 I now want to build a social-agent : it can run sandboxed claude-code sessions.
 First provider is daytona for this. It will have its own dockerfile to include the claude-code.
-That social-agent will have our social-fetch as mcp.
-I should be able to set the env vars for it 
+That social-agent container wil have our social skills an
+I should be able to set the env vars for i such as the social-browser pool or envs 
 
 I will later extend this into a social-research which will extend this to specific context/system prompt and agent tooling.
+
+Look at addt claude logic for running it headless

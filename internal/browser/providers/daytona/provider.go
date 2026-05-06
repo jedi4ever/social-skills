@@ -237,14 +237,30 @@ func (p *Provider) RefreshToken(ctx context.Context, id string) (string, error) 
 // ----- helpers (lifted from cmd/social-daytona/cmd_up.go) -----
 
 // bootDaemons launches docker-entrypoint.sh inside the sandbox
-// as a detached background tree via `daytona exec`. setsid +
-// nohup + redirect-stdin-from-/dev/null makes the process tree
-// survive the exec session ending. See cmd_up.go in the original
-// social-daytona for the rationale.
+// as a detached background tree via `daytona exec`.
+//
+// Daytona doesn't run the image's ENTRYPOINT / CMD — it substitutes
+// its own PID 1 — so post-create exec is the ONLY way to start
+// the in-sandbox daemons (chromedp pool + ledger + MCP).
+//
+// Quoting trap: `daytona exec ID -- bash -c <script>` joins everything
+// after `--` with whitespace and re-evaluates inside the sandbox
+// shell, so a multi-token script like `setsid nohup ... > log &`
+// silently degrades to `setsid` with no command. We work around it
+// by wrapping the script in literal single quotes; the outer sandbox
+// shell preserves the quoted region as one arg to bash -c.
+//
+// nohup + redirect-stdin-from-/dev/null + `& disown` makes the
+// process tree survive the exec session ending. setsid is dropped
+// — it was finicky in some sandbox util-linux builds, and the
+// nohup + disown combo is enough.
 func bootDaemons(sandboxID string) error {
-	wrapper := `setsid nohup /usr/local/bin/docker-entrypoint.sh all > /tmp/social-skills.log 2>&1 < /dev/null &
-exit 0`
-	cmd := exec.Command("daytona", "exec", sandboxID, "--", "/bin/sh", "-c", wrapper)
+	// Single-line, single-quoted. Don't put single quotes INSIDE
+	// the script — there's no way to escape them while staying
+	// inside the outer pair without breaking the daytona-CLI
+	// whitespace-join.
+	script := `nohup /usr/local/bin/docker-entrypoint.sh all > /tmp/social-skills.log 2>&1 < /dev/null & disown`
+	cmd := exec.Command("daytona", "exec", sandboxID, "--", "bash", "-c", "'"+script+"'")
 	cmd.Env = ensureDaytonaAPIEnv(os.Environ())
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
