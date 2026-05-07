@@ -126,15 +126,26 @@ func NewMux(srv *server.MCPServer, opts Options) http.Handler {
 	return wrapRequestLog(opts, injectHostHeader(mux))
 }
 
-// injectHostHeader copies r.Host into r.Header["Host"] so
-// downstream handlers reading the Header map (instead of the
-// http.Request fields) can see the host the client targeted.
-// Idempotent — if a fronting proxy already injected an explicit
-// Host header (rare), we leave it.
+// injectHostHeader copies r.Host into r.Header["Host"] and
+// reflects the actual transport (https vs http, taken from
+// r.TLS) into r.Header["X-Forwarded-Proto"]. MCP tool handlers
+// only see the Header map, never the http.Request fields, so
+// without this injection they'd see an empty Host and assume
+// HTTP — breaking absolute artifact URLs. Idempotent: if a
+// fronting proxy already set Host or X-Forwarded-Proto, we
+// preserve those (the proxy knows the public-facing transport
+// better than we do).
 func injectHostHeader(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != "" && r.Header.Get("Host") == "" {
 			r.Header.Set("Host", r.Host)
+		}
+		if r.Header.Get("X-Forwarded-Proto") == "" {
+			scheme := "http"
+			if r.TLS != nil {
+				scheme = "https"
+			}
+			r.Header.Set("X-Forwarded-Proto", scheme)
 		}
 		next.ServeHTTP(w, r)
 	})
